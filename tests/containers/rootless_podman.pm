@@ -17,6 +17,7 @@
 
 use Mojo::Base 'containers::basetest';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use containers::common;
 use containers::container_images;
@@ -26,10 +27,13 @@ use power_action_utils 'power_action';
 use bootloader_setup 'add_grub_cmdline_settings';
 use Utils::Architectures;
 use transactional 'process_reboot';
+use Utils::Logging 'save_and_upload_log';
+
+my $bsc1200623 = 0;    # to prevent printing the soft-failure more than once
 
 sub run {
     my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     my $user = $testapi::username;
 
     my $podman = $self->containers_factory('podman');
@@ -47,7 +51,7 @@ sub run {
             power_action('reboot', textmode => 1);
             $self->wait_boot(bootloader_time => 360);
         }
-        $self->select_serial_terminal;
+        select_serial_terminal;
 
         validate_script_output 'cat /proc/cmdline', sub { /systemd\.unified_cgroup_hierarchy=1/ };
         validate_script_output 'podman info', sub { /cgroupVersion: v2/ };
@@ -118,7 +122,7 @@ sub run {
     build_and_run_image(base => $image, runtime => $podman);
     test_zypper_on_container($podman, $image);
     verify_userid_on_container($image, $subuid_start);
-    $podman->cleanup_system_host();
+    $podman->cleanup_system_host(!$bsc1200623);
 }
 
 sub get_user_subuid {
@@ -134,17 +138,20 @@ sub verify_userid_on_container {
     record_info "host uid", "$huser_id";
     record_info "root default user", "rootless mode process runs with the default container user(root)";
     my $cid = script_output "podman run -d --rm --name test1 $image sleep infinity";
+    $cid = check_bsc1200623($cid);
     validate_script_output "podman top $cid user huser", sub { /root\s+1000/ };
     validate_script_output "podman top $cid capeff", sub { /setuid/i };
 
     record_info "non-root user", "process runs under the range of subuids assigned for regular user";
     $cid = script_output "podman run -d --rm --name test2 --user 1000 $image sleep infinity";
+    $cid = check_bsc1200623($cid);
     my $id = $start_id + $huser_id - 1;
     validate_script_output "podman top $cid user huser", sub { /1000\s+${id}/ };
     validate_script_output "podman top $cid capeff", sub { /none/ };
 
     record_info "root with keep-id", "the default user(root) starts process with the same uid as host user";
     $cid = script_output "podman run -d --rm --userns keep-id $image sleep infinity";
+    $cid = check_bsc1200623($cid);
     # Remove once the softfail removed. it is just checks the user's mapped uid
     validate_script_output "podman exec -it $cid cat /proc/self/uid_map", sub { /1000/ };
     my $output = script_output("podman top $cid user huser 2>&1", proceed_on_failure => 1);
@@ -171,20 +178,35 @@ sub check_bsc1192051() {
     return script_run('podman run --rm -it registry.opensuse.org/opensuse/tumbleweed:latest bash -c "test -x /bin/sh"') != 0;
 }
 
+sub check_bsc1200623() {
+    my ($cid) = shift;
+    # When this bug appears, the output (cid) is composed of 2 lines, e.g.
+    # cid = "
+    # 2022-07-05T08:48:56.151176-04:00 susetest systemd[3438]: Failed to start podman-6734.scope.
+    # 5b08b0dc136dd32bb30e69e4deb5df511dea0602d6b0c8d3623120370184506a"
+    # So, we need to remove the first one.
+    if ($cid =~ /Failed to start podman/) {
+        record_soft_failure('bsc#1200623 - systemd[3557]: Failed to start podman-3627.scope') unless ($bsc1200623);
+        $bsc1200623 = 1;    # to prevent printing the soft-failure more than once
+        ($cid) =~ s/.*\n//;
+    }
+    return $cid;
+}
+
 sub post_run_hook {
     my $self = shift;
-    $self->select_serial_terminal();
+    select_serial_terminal();
     assert_script_run "setfacl -x u:$testapi::username /etc/zypp/credentials.d/*" if is_sle;
     $self->SUPER::post_run_hook;
 }
 
 sub post_fail_hook {
     my $self = shift;
-    $self->save_and_upload_log('cat /etc/{subuid,subgid}', "/tmp/permissions.txt");
+    save_and_upload_log('cat /etc/{subuid,subgid}', "/tmp/permissions.txt");
     assert_script_run("tar -capf /tmp/proc_files.tar.xz /proc/self");
     upload_logs("/tmp/proc_files.tar.xz");
     if (is_sle) {
-        $self->save_and_upload_log('ls -la /etc/zypp/credentials.d', "/tmp/credentials.d.perm.txt");
+        save_and_upload_log('ls -la /etc/zypp/credentials.d', "/tmp/credentials.d.perm.txt");
         assert_script_run "setfacl -x u:$testapi::username /etc/zypp/credentials.d/*";
     }
     $self->SUPER::post_fail_hook;

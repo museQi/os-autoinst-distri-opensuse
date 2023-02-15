@@ -49,13 +49,13 @@ YuiRestClient::Widget::SelectionBox - Class representing a selection box in the 
 
 =head1 COPYRIGHT
 
-Copyright © 2020 SUSE LLC
+Copyright 2020 SUSE LLC
 
 SPDX-License-Identifier: FSFAP
 
 =head1 AUTHORS
 
-QE YaST <qa-sle-yast@suse.de>
+QE Yam <qe-yam at suse de>
 
 =head1 SYNOPSIS
 

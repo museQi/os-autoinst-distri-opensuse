@@ -85,24 +85,19 @@ sub run {
         assert_and_click 'finish-button-in-win10';
         assert_screen 'successful-certificate-import';
         # close all opened windows, including powershell
-        send_key_until_needlematch 'powershell-ready-prompt', 'alt-f4', 25, 2;
+        send_key_until_needlematch 'powershell-ready-prompt', 'alt-f4', 26, 2;
     }
 
     # enable WSL & VM platform (WSL2) features
     # reboot the SUT
     $self->run_in_powershell(
         cmd => $powershell_cmds->{enable_wsl_feature}->{wsl},
-        timeout => 120
+        timeout => 240
     );
-
     if (get_var('WSL2')) {
         $self->run_in_powershell(
             cmd => $powershell_cmds->{enable_wsl_feature}->{vm_platform},
-            timeout => 120
-        );
-        $self->run_in_powershell(
-            cmd => "Invoke-WebRequest -Uri $ms_kernel_link -O C:\\kernel.msi  -UseBasicParsing",
-            timeout => 420
+            timeout => 240
         );
     }
 
@@ -112,30 +107,27 @@ sub run {
     # 5) Install Linux in WSL
     if (get_var('WSL2')) {
         $self->open_powershell_as_admin;
-        $self->run_in_powershell(
-            cmd => q{ii C:\\kernel.msi},
-            code => sub {
-                assert_screen 'wsl2-install-kernel-start';
-                send_key 'ret';
-                assert_screen 'wsl2-install-kernel-finished';
-                send_key 'ret';
-            }
-        );
-        $self->run_in_powershell(
-            cmd => q{wsl --set-default-version 2}
-        );
-        $self->run_in_powershell(
-            cmd => q{$port.close()},
-            code => sub { }
-        );
+        $self->install_wsl2_kernel;
     } else {
         $self->open_powershell_as_admin(no_serial => 1);
+        $self->run_in_powershell(
+            cmd => "wsl --set-default-version 1",
+            code => sub { }
+        ) if (check_var("WIN_VERSION", "11"));
     }
+
+    record_info 'Port close', 'Closing serial port...';
+    $self->run_in_powershell(
+        cmd => q{$port.close()},
+        code => sub { }
+    );
 
     $self->run_in_powershell(
         cmd => qq{ii C:\\$wsl_appx_filename},
         code => sub {
-            assert_and_click 'install-linux-in-wsl', timeout => 120;
+            assert_screen(['install-linux-in-wsl', 'install-linux-in-wsl-background'], timeout => 120);
+            assert_and_click 'install-linux-in-wsl-background' if (match_has_tag 'install-linux-in-wsl-background');
+            assert_and_click 'install-linux-in-wsl';
         }
     );
 }

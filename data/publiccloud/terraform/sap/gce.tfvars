@@ -4,7 +4,7 @@
 #################################
 
 # GCP project id
-project = "suse-sle-qa"
+project = "ei-sle-qa-sap-8469"
 
 # Credentials file for GCP
 gcp_credentials_file = "/root/google_credentials.json"
@@ -193,7 +193,7 @@ hana_cluster_vip = "10.0.1.200"
 
 # Select HANA cluster fencing mechanism. 'native' by default
 # Find more information in `doc/fencing.md` documentation page
-#hana_cluster_fencing_mechanism = "sbd"
+hana_cluster_fencing_mechanism = "%FENCING_MECHANISM%"
 
 # Enable Active/Active HANA setup (read-only access in the secondary instance)
 #hana_active_active = true
@@ -259,12 +259,11 @@ hana_ips = ["10.0.0.2", "10.0.0.3"]
 # HANA instance number. It's composed of 2 integers string
 #hana_instance_number = "00"
 # HANA instance master password. It must follow the SAP Password policies
-#hana_master_password = "YourPassword1234"
+hana_master_password = "YourPass1234!"
 # HANA primary site name. Only used if HANA's system replication feature is enabled (hana_ha_enabled to true)
 #hana_primary_site = "Site1"
 # HANA secondary site name. Only used if HANA's system replication feature is enabled (hana_ha_enabled to true)
 #hana_secondary_site = "Site2"
-hana_master_password = "Linux1234"
 
 # Cost optimized scenario
 #scenario_type = "cost-optimized"
@@ -308,7 +307,7 @@ hana_master_password = "Linux1234"
 ########################
 
 # Enable drbd cluster
-drbd_enabled = true
+drbd_enabled = false
 
 #drbd_machine_type = "n1-standard-4"
 

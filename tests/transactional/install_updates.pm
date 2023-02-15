@@ -6,19 +6,24 @@
 # Summary: Install Update repos in transactional server
 # Maintainer: qac team <qa-c@suse.de>
 
-use base "opensusebasetest";
+use base "consoletest";
 use strict;
 use warnings;
 use testapi;
 use qam;
 use transactional;
 use version_utils 'is_sle_micro';
+use serial_terminal;
+use utils qw(script_retry);
 
 sub run {
     my ($self) = @_;
-    select_console 'root-console';
+
+    select_serial_terminal;
+
     if (is_sle_micro) {
         assert_script_run 'curl -k https://ca.suse.de/certificates/ca/SUSE_Trust_Root.crt -o /etc/pki/trust/anchors/SUSE_Trust_Root.crt';
+        script_retry('pgrep update-ca-certificates', retry => 5, delay => 2, die => 0);
         assert_script_run 'update-ca-certificates -v';
 
         # Clean the journal to avoid capturing bugs that are fixed after installing updates

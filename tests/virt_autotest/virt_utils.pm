@@ -21,13 +21,12 @@ use XML::Writer;
 use IO::File;
 use List::Util 'first';
 use LWP::Simple 'head';
-use proxymode;
 use version_utils 'is_sle';
 use virt_autotest::utils;
-use version_utils qw(is_sle get_os_release);
+use version_utils qw(is_sle is_alp get_os_release);
 
 our @EXPORT
-  = qw(enable_debug_logging update_guest_configurations_with_daily_build locate_sourcefile get_repo_0_prefix repl_repo_in_sourcefile repl_addon_with_daily_build_module_in_files repl_module_in_sourcefile handle_sp_in_settings handle_sp_in_settings_with_fcs handle_sp_in_settings_with_sp0 clean_up_red_disks lpar_cmd upload_virt_logs generate_guest_asset_name get_guest_disk_name_from_guest_xml compress_single_qcow2_disk get_guest_list remove_vm download_guest_assets restore_downloaded_guests is_installed_equal_upgrade_major_release generateXML_from_data check_guest_disk_type recreate_guests perform_guest_restart collect_host_and_guest_logs cleanup_host_and_guest_logs monitor_guest_console start_monitor_guest_console stop_monitor_guest_console is_developing_sles is_registered_sles);
+  = qw(enable_debug_logging update_guest_configurations_with_daily_build locate_sourcefile get_repo_0_prefix repl_repo_in_sourcefile repl_addon_with_daily_build_module_in_files repl_module_in_sourcefile handle_sp_in_settings handle_sp_in_settings_with_fcs handle_sp_in_settings_with_sp0 clean_up_red_disks lpar_cmd generate_guest_asset_name get_guest_disk_name_from_guest_xml compress_single_qcow2_disk get_guest_list download_guest_assets is_installed_equal_upgrade_major_release generateXML_from_data check_guest_disk_type perform_guest_restart collect_host_and_guest_logs cleanup_host_and_guest_logs monitor_guest_console start_monitor_guest_console stop_monitor_guest_console is_developing_sles is_registered_sles);
 
 sub enable_debug_logging {
 
@@ -45,7 +44,7 @@ sub enable_debug_logging {
     }
     save_screenshot;
 
-    # enable journal log with prvious reboot
+    # enable journal log with previous reboot
     my $journald_conf_file = "/etc/systemd/journald.conf";
     if (!script_run "ls $journald_conf_file") {
         script_run "sed -i '/^[# ]*Storage *=/{h;s/^[# ]*Storage *=.*\$/Storage=persistent/};\${x;/^\$/{s//Storage=persistent/;H};x}' $journald_conf_file";
@@ -63,12 +62,7 @@ sub enable_debug_logging {
     save_screenshot;
 
     #restart libvirtd to make debug level and coredump take effect
-    if (is_sle('<12')) {
-        script_run 'rclibvirtd restart';
-    }
-    else {
-        script_run 'systemctl restart libvirtd';
-    }
+    virt_autotest::utils::restart_libvirtd;
 }
 
 sub get_version_for_daily_build_guest {
@@ -87,8 +81,17 @@ sub get_version_for_daily_build_guest {
 }
 
 sub locate_sourcefile {
-    my $location = script_output("perl /usr/share/qa/tools/location_detect_impl.pl", 60);
-    $location =~ s/[\r\n]+$//;
+    my $location = '';
+    if (!is_s390x) {
+        $location = script_output("perl /usr/share/qa/tools/location_detect_impl.pl", 60);
+        $location =~ s/[\r\n]+$//;
+    }
+    else {
+        #S390x LPAR just be only located at DE now.
+        #No plan move S390x LPAR to the other location.
+        #So, define variable location as "de" for S390x LPAR.
+        $location = 'de';
+    }
     return $location;
 }
 
@@ -105,17 +108,7 @@ sub repl_repo_in_sourcefile {
     my $verorig = "source.http.sles-" . get_version_for_daily_build_guest . "-64";
     my $veritem = is_x86_64 ? $verorig : get_required_var('ARCH') . ".$verorig";
     if (get_var("REPO_0")) {
-        my $location = '';
-        if (!is_s390x) {
-            $location = locate_sourcefile;
-        }
-        else {
-            #S390x LPAR just be only located at DE now.
-            #No plan move S390x LPAR to the other location.
-            #So, define variable location as "de" for S390x LPAR.
-            $location = 'de';
-        }
-        my $soucefile = "/usr/share/qa/virtautolib/data/" . "sources." . "$location";
+        my $soucefile = "/usr/share/qa/virtautolib/data/" . "sources." . locate_sourcefile;
         my $newrepo = get_repo_0_prefix . get_var("REPO_0");
         # for sles15sp2+, install host with Online installer, while install guest with Full installer
         $newrepo =~ s/-Online-/-Full-/ if ($verorig =~ /15-sp[2-9]/i);
@@ -302,16 +295,6 @@ sub lpar_cmd {
     }
 }
 
-sub upload_virt_logs {
-    my ($log_dir, $compressed_log_name) = @_;
-
-    my $full_compressed_log_name = "/tmp/$compressed_log_name.tar.gz";
-    script_run("tar -czf $full_compressed_log_name $log_dir; rm $log_dir -r", 60);
-    save_screenshot;
-    upload_logs "$full_compressed_log_name";
-    save_screenshot;
-}
-
 # Guest xml will be uploaded with name format [generated_name_by_this_func].xml
 # Guest disk will be uploaded with name format [generated_name_by_this_func].disk
 # When reusing these assets, needs to recover the names to original by reverting this process
@@ -394,21 +377,8 @@ sub get_guest_list {
     my $qa_guest_config_file = "/usr/share/qa/virtautolib/data/vm_guest_config_in_vh_update";
     my $hypervisor_type = get_var('SYSTEM_ROLE', '');
     my $guest_list = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vms_from_config_file $qa_guest_config_file $guest_pattern $hypervisor_type";
-    record_soft_failure("Not found guest pattern $guest_pattern in $qa_guest_config_file") if ($guest_list eq '');
+    record_info('Softfail', "Not found guest pattern $guest_pattern in $qa_guest_config_file", result => 'softfail') if ($guest_list eq '');
     return $guest_list;
-}
-
-# remove a vm listed via 'virsh list'
-sub remove_vm {
-    my $vm = shift;
-    my $is_persistent_vm = script_output "virsh dominfo $vm | sed -n '/Persistent:/p' | awk '{print \$2}'";
-    my $vm_state = script_output "virsh domstate $vm";
-    if ($vm_state ne "shut off") {
-        assert_script_run("virsh destroy $vm", 30);
-    }
-    if ($is_persistent_vm eq "yes") {
-        assert_script_run("virsh undefine $vm", 30);
-    }
 }
 
 # Download guest image and xml from a NFS location to local
@@ -437,7 +407,7 @@ sub download_guest_assets {
             push @available_guests, $guest;
         }
         else {
-            record_soft_failure("$vm_disk_url not found!");
+            record_info('Softfail', "$vm_disk_url not found!", result => 'softfail');
         }
     }
     return 0 unless @available_guests;
@@ -467,7 +437,7 @@ sub download_guest_assets {
         # download vm xml file
         my $rc = script_run("cp $mount_point/$remote_guest_xml_file $vm_xml_dir/$guest.xml", 60);
         if ($rc) {
-            record_soft_failure("Failed copying: $mount_point/$remote_guest_xml_file");
+            record_info('Softfail', "Failed copying: $mount_point/$remote_guest_xml_file", result => 'softfail');
             next;
         }
         script_run("ls -l $vm_xml_dir", 10);
@@ -490,7 +460,7 @@ sub download_guest_assets {
         $rc = script_run("cp $mount_point/$remote_guest_disk $local_guest_image", 300);    #it took 75 seconds copy from vh016 to vh001
         script_run "ls -l $local_guest_image";
         if ($rc) {
-            record_soft_failure("Failed to download: $remote_guest_disk");
+            record_info('Softfail', "Failed to download: $remote_guest_disk", result => 'softfail');
             next;
         }
         $guest_count++;
@@ -501,15 +471,6 @@ sub download_guest_assets {
 
     return $guest_count;
 }
-
-#Start the guest from the downloaded vm xml and vm disk file
-sub restore_downloaded_guests {
-    my ($guest, $vm_xml_dir) = @_;
-    record_info("Guest restored", "$guest");
-    my $vm_xml = "$vm_xml_dir/$guest.xml";
-    assert_script_run("virsh define $vm_xml", 30);
-}
-
 
 sub is_installed_equal_upgrade_major_release {
     #get the version that the host is installed to
@@ -643,22 +604,6 @@ sub check_guest_disk_type {
     }
 }
 
-#recreate all defined guests
-sub recreate_guests {
-    my $based_guest_dir = shift;
-    return if get_var('INCIDENT_ID');    # QAM does not recreate guests every time
-    my $get_vm_hostnames = "virsh list  --all | grep -e sles -e opensuse | awk \'{print \$2}\'";
-    my $vm_hostnames = script_output($get_vm_hostnames, 30, type_command => 0, proceed_on_failure => 0);
-    my @vm_hostnames_array = split(/\n+/, $vm_hostnames);
-    foreach (@vm_hostnames_array)
-    {
-        script_run("virsh destroy $_");
-        script_run("virsh undefine $_");
-        script_run("virsh define /$based_guest_dir/$_.xml");
-        script_run("virsh start $_");
-    }
-}
-
 #Perform restart operation on desired guests of local or remote host
 #User should check guest status as expected in his/her customized and
 #suitable way after restart if there are associated specific concerns
@@ -732,7 +677,7 @@ sub cleanup_host_and_guest_logs {
     $extra_logs_to_cleanup //= '';
 
     #Clean dhcpd and named services up explicity
-    if (get_var('VIRT_AUTOTEST')) {
+    if (get_var('VIRT_AUTOTEST') and !is_alp) {
         script_run("brctl addbr br123;brctl setfd br123 0;ip addr add 192.168.123.1/24 dev br123;ip link set br123 up");
         if (!get_var('VIRT_UNIFIED_GUEST_INSTALL')) {
             my @control_operation = ('restart');

@@ -11,6 +11,7 @@ use Utils::Architectures;
 use utils;
 use version_utils qw(is_sle is_livecd);
 use bootloader_setup qw(stop_grub_timeout boot_into_snapshot);
+use Utils::Backends;
 
 our @EXPORT = qw(
   grub_test
@@ -27,9 +28,11 @@ Handle grub menu after reboot
     - Enable plymouth debug if product if GRUB_KERNEL_OPTION_APPEND is set,
       or product is sle, aarch64 and PLYMOUTH_DEBUG is set
 =cut
+
 sub grub_test {
     my $timeout = get_var('GRUB_TIMEOUT', 200);
 
+    reconnect_mgmt_console if is_pvm;
     handle_installer_medium_bootup();
     workaround_type_encrypted_passphrase;
     # 60 due to rare slowness e.g. multipath poo#11908
@@ -37,7 +40,7 @@ sub grub_test {
     assert_screen('grub2', $timeout);
     stop_grub_timeout;
     boot_into_snapshot if get_var("BOOT_TO_SNAPSHOT");
-    send_key_until_needlematch("bootmenu-xen-kernel", 'down', 10, 5) if get_var('XEN');
+    send_key_until_needlematch("bootmenu-xen-kernel", 'down', 11, 5) if get_var('XEN');
     if ((is_aarch64 && is_sle && get_var('PLYMOUTH_DEBUG'))
         || get_var('GRUB_KERNEL_OPTION_APPEND'))
     {
@@ -55,13 +58,10 @@ sub grub_test {
 
 Due to pre-installation setup, qemu boot order is always booting from CD-ROM.
 =cut
+
 sub handle_installer_medium_bootup {
     return unless (check_var("BOOTFROM", "d") || (get_var('UEFI') && get_var('USBBOOT')));
     assert_screen 'inst-bootmenu', 180;
-
-    if (check_var("BOOTFROM", "d") && check_var("AUTOUPGRADE") && check_var("PATCH")) {
-        assert_screen 'grub2';
-    }
 
     # Layout of live is different from installation media
     my $key = is_livecd() ? 'down' : 'up';
@@ -76,7 +76,7 @@ sub bug_workaround_bsc1005313 {
     record_soft_failure "Running with plymouth:debug to catch bsc#1005313" if get_var('PLYMOUTH_DEBUG');
     send_key 'e';
     # Move to end of kernel boot parameters line
-    send_key_until_needlematch "linux-line-selected", "down", 25;
+    send_key_until_needlematch "linux-line-selected", "down", 26;
     send_key "end";
 
     assert_screen "linux-line-matched";

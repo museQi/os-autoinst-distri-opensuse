@@ -8,19 +8,19 @@
 #          In fips mode, openssl only works with the FIPS
 #          approved Cihper algorithms: AES and DES3
 #
-# Maintainer: Ben Chou <bchou@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#44837
 
 use base "consoletest";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use strict;
 use warnings;
 use utils;
 use version_utils 'is_sle';
 
 sub run {
-    my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     zypper_call 'in openssl';
 
     my $enc_passwd = "pass1234";

@@ -1,5 +1,5 @@
-Testing on real hardware for Raspberry Pi testing
-=================================================
+Testing on real hardware for Raspberry Pi
+=========================================
 
 # Initial notes
 This document is refering to the internal openqa.suse.de (OSD) setup and not to the
@@ -21,15 +21,25 @@ While most of the setup is similar, there are some key differences:
 │                           │  USB   │  └───────┘ │
 │                           ├───────►│ USB SD-Mux ├─┐ µSD   ┌────────────────┐         ┌─────────────────┐
 │         piworker          │        └────────────┘ └──────►│                │   5V    │ WLAN Power Plug │
-│     Raspberry Pi 4(00)    │      USB UART Adapter         │ Raspberry Pi 4 ├────────►│  Shelly Plug S  │
+│      Raspberry Pi 4B      │      USB UART Adapter         │ Raspberry Pi 4 ├────────►│  Shelly Plug S  │
 │                           ├──────────────────────────────►│                │         └─────────────────┘
-│ ┌───────────────────────┐ │                               └────────────────┘
-│ │ openQA-worker WLAN AP │ │        ┌──┬───────┬─┐
-│ └───────────────────────┘ │        │  │SD-Card│ │
-│                           │  USB   │  └───────┘ │
-│ ┌───────────────────────┐ ├───────►│ USB SD-Mux ├─┐ µSD   ┌──────────────────┐       ┌─────────────────┐
-│ │ openQA-worker BT      │ │        └────────────┘ └──────►│                  │  5V   │ WLAN Power Plug │
-│ └───────────────────────┘ │      USB UART Adapter         │ Raspberry Pi 3B+ ├──────►│  Shelly Plug S  │
+│                           │                               │                │   SPI   ┌─────────────────┐
+│                           │  USB  ┌──────────────┐  HDMI  │                ├────────►│  LetsTrust TPM  │
+│                           ├──────►│ HDMI Grabber │───────►│                │         └─────────────────┘
+│                           │       └──────────────┘        │                │   I2C   ┌─────────────────┐
+│                           │                               │                ├────────►│    DS3231 RTC   │
+│                           │  WIFI ┌──────────────┐  USB   │                │         └─────────────────┘
+│                           ├──────►│ RPi Pico Kbd │───────►│                │
+│ ┌───────────────────────┐ │       │   Emulator   │        │                │
+│ │ openQA-worker WLAN AP │ │       └──────────────┘        │                │
+│ └───────────────────────┘ │                               │                │
+│                           │                               └────────────────┘
+│ ┌───────────────────────┐ │        ┌──┬───────┬─┐
+│ │ openQA-worker BT      │ │        │  │SD-Card│ │
+│ └───────────────────────┘ │  USB   │  └───────┘ │
+│                           ├───────►│ USB SD-Mux ├─┐ µSD   ┌──────────────────┐       ┌─────────────────┐
+│                           │        └────────────┘ └──────►│                  │  5V   │ WLAN Power Plug │
+│                           │      USB UART Adapter         │ Raspberry Pi 3B+ ├──────►│  Shelly Plug S  │
 │                           ├──────────────────────────────►│                  │       └─────────────────┘
 │                           │                               └──────────────────┘
 │                           │        ┌──┬───────┬─┐
@@ -48,6 +58,7 @@ All Raspberries are connected to the QA Network via Ethernet cable.
 The Shelly Plugs are connected to the piworker directly via WLAN (`openQA-worker`) using the AP on that device.
 The SUTs are connecting to that WLAN Network during the openQA test as well as searching for Bluetooth devices during the test to check wireless connectivity.
 The 230V AC to 5V DC power adapters have been omitted in this graphic for better overview.
+The code of the Rpi Pico Keyboard Emulator can be found [here](https://github.com/os-autoinst/os-autoinst-distri-opensuse/tree/master/data/generalhw_scripts/rpi_pico_w_keyboard).
 
 # Setup
 
@@ -80,6 +91,11 @@ Ensure that `_openqa-worker` will be able to access the usb-serial adapter:
 usermod -a -G dialout _openqa-worker
 ```
 
+Ensure that `_openqa-worker` will be able to access the HDMI grabber:
+```
+usermod -a -G video _openqa-worker
+```
+
 Disable apparmor:
 ```
 systemctl mask apparmor
@@ -90,6 +106,13 @@ systemctl mask apparmor
 Add to `/etc/fstab`:
 ```
 openqa.suse.de:/var/lib/openqa/share /var/lib/openqa/share nfs noauto,nofail,retry=30,ro,x-systemd.automount,x-systemd.device-timeout=10m,x-systemd.mount-timeout=30m  0 0
+```
+
+## Use tmpfs for pool directory (to extend sdcard lifetime if you have enough RAM)
+
+Add to `/etc/fstab`:
+```
+tmpfs /var/lib/openqa/pool tmpfs defaults 0 0
 ```
 
 ## Create worker configuration
@@ -118,6 +141,9 @@ GENERAL_HW_SOL_ARGS = serial/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb
 
 SUT_IP = <INSERT RASPBERRY SUT IP HERE AS CONFIGURED IN NETWORK DHCP SERVER>
 WORKER_CLASS = generalhw_RPi4
+
+GENERAL_HW_VIDEO_STREAM_URL = /dev/v4l/by-path/platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.2.2:1.0-video-index0
+GENERAL_HW_KEYBOARD_URL = http://192.168.7.21/cmd
 ```
 
 In the configuration above the sdmux devices (the control as well as the block device node) are added by serial number, so they will just work on any usb port. The USB UART adapters don't have a serial number so they are added by path which means that they can be distinguished reliably only as long as they are always connected to the same usb port (this is also true for the usb hub they are connected to).
@@ -125,14 +151,9 @@ In the configuration above the sdmux devices (the control as well as the block d
 Workaround for https://progress.opensuse.org/issues/105855: openqa-worker will fail if it starts before NTP sync is done (on non-RTC hosts) so auto-restart worker and try to wait for time-sync.target.
 Write to `/etc/systemd/system/openqa-worker@.service.d/override.conf`:
 ```
-[Unit]
-Wants=time-sync.target
-After=time-sync.target
- 
 [Service]
-Restart=on-failure
-# Allow ntp daemon to sync
-ExecStartPre=sleep 30s
+Restart=always
+RestartSec=10s
 ```
 
 Enable the worker:
@@ -229,18 +250,29 @@ firewall-cmd --reload
 ```
 
 ## Bluetooth configuration
-Write to `/etc/bluetooth/main.conf`:
+Write to `/etc/systemd/system/bluetooth-config.service`:
 ```
-[Policy]
-AutoEnable=true
-[General]
-DiscoverableTimeout = 0
-Name = openQA-worker
+[Unit]
+Description=Configure bluetooth
+After=bluetooth.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bluetoothctl power on
+ExecStart=/usr/bin/bluetoothctl system-alias openQA-worker
+ExecStart=/usr/bin/bluetoothctl discoverable-timeout 0
+ExecStart=/usr/bin/bluetoothctl discoverable on
+ExecStart=/usr/bin/bluetoothctl show
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 Enable bluetooth:
 ```
 systemctl enable --now bluetooth
+systemctl enable --now bluetooth-config
 ```
 
 ## Workaround for insufficient RAM

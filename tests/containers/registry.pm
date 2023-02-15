@@ -4,10 +4,10 @@
 # Copyright 2012-2021 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Package: docker-distribution-registry
+# Package: docker-distribution-registry | distribution-registry
 # Summary: Test container registry package
-# - docker-distribution-registry package can be installed
-# - docker-distribution-registry daemon can be started
+# - distribution-registry package can be installed
+# - distribution-registry daemon can be started
 # - images can be pushed
 # - images can be searched
 # - images can be pulled
@@ -16,6 +16,7 @@
 
 use Mojo::Base 'containers::basetest';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(is_sle is_tumbleweed is_leap);
 use registration;
@@ -47,8 +48,7 @@ sub registry_push_pull {
     if (script_run($engine->runtime . " images | grep '$image'") == 0) {
         assert_script_run $engine->runtime . " image rm -f $image", 90;
     } else {
-        record_soft_failure("containers/podman#10685",
-            "Known issue - containers/podman#10685: podman image rm --force also untags other images (3.2.0 regression)");
+        record_soft_failure("Known issue - containers/podman#10685: podman image rm --force also untags other images (3.2.0 regression)");
     }
     assert_script_run "! " . $engine->runtime . " images | grep '$image'", 60;
     assert_script_run "! " . $engine->runtime . " images | grep 'localhost:5000/$image'", 60;
@@ -60,12 +60,24 @@ sub registry_push_pull {
 
 sub run {
     my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Install and check that it's running
-    add_suseconnect_product('PackageHub', undef, undef, undef, 300, 1) if is_sle(">=15");
-    zypper_call 'se -v docker-distribution-registry';
-    zypper_call 'in docker-distribution-registry';
+    my $pkg = 'distribution-registry';
+    if (is_sle(">=15-SP4")) {
+        activate_containers_module;
+    } elsif (is_sle("<=15")) {
+        record_info("SKIP", "docker-distribution-registry is not available on this version of SLE");
+        return;
+    } elsif (is_sle(">15")) {
+        add_suseconnect_product('PackageHub', undef, undef, undef, 300, 1);
+        $pkg = 'docker-distribution-registry';
+    } elsif (is_leap("<15.4")) {
+        $pkg = 'docker-distribution-registry';
+    }
+
+    zypper_call "se -v $pkg";
+    zypper_call "in $pkg";
     systemctl '--now enable registry';
     systemctl 'status registry';
 

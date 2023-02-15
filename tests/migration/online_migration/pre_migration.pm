@@ -1,27 +1,29 @@
 # SLE12 online migration tests
 #
-# Copyright 2016 SUSE LLC
+# Copyright 2016-2022 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: btrfsprogs zypper
 # Summary: sle12 online migration testsuite
-# Maintainer: yutao <yuwang@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "consoletest";
 use strict;
 use warnings;
 use testapi;
 use Utils::Architectures;
+use Utils::Backends;
 use utils;
 use migration;
 use version_utils;
 use x11utils 'turn_off_gnome_show_banner';
 
 sub check_or_install_packages {
+    assert_script_run('modprobe nvram') if is_pvm_hmc;
     if (get_var("FULL_UPDATE") || get_var("MINIMAL_UPDATE")) {
         if (is_leap_migration) {
             # https://bugzilla.suse.com/show_bug.cgi?id=1197268#c2
-            record_soft_failure('bsc#1197268', 'suseconnect-ng obsoletes zypper-migration-plugin in leap to sle migration');
+            record_soft_failure('bsc#1197268 - suseconnect-ng obsoletes zypper-migration-plugin in leap to sle migration');
             zypper_call('rm zypper-migration-plugin');
             zypper_call "in yast2-registration rollback-helper";
             if (get_var('LEAP_TECH_PREVIEW_REPO')) {
@@ -35,7 +37,10 @@ sub check_or_install_packages {
         } else {
             # if system is fully updated or even minimal patch applied,
             # all necessary packages for online migration should be installed
-            assert_script_run("rpm -q $_") foreach qw(yast2-migration zypper-migration-plugin rollback-helper);
+            # and zypper-migration-plugin was obsoleted since 15sp4.
+            my @pkgs = qw(yast2-migration rollback-helper);
+            push @pkgs, "zypper-migration-plugin" if is_sle('<15-SP4', get_var('ORIGIN_SYSTEM_VERSION'));
+            assert_script_run("rpm -q $_") foreach @pkgs;
         }
     } else {
         # install necessary packages for online migration if system is not updated

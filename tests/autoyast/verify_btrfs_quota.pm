@@ -5,7 +5,7 @@
 #
 # Summary: Verify that quota is set and corresponds to the expected limit for the required subvolumes.
 # The list of subvolumes and expected quota limit are stored in 'test_data'.
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'basetest';
 use strict;
@@ -19,9 +19,9 @@ sub run {
     foreach my $disk (@{$test_data->{disks}}) {
         foreach my $partition (@{$disk->{partitions}}) {
             my $mount_point = $partition->{mounting_options}->{mount_point};
-            my $output_btrfs_subvolumes = assert_script_run("btrfs subvolume list $mount_point");
+            my $output_btrfs_subvolumes = script_output("btrfs subvolume list $mount_point");
             # Get 'qgroupid' and 'max_rfer' columns from the output. Other columns are not needed for this test.
-            my $output_btrfs_qgroups = assert_script_run("btrfs qgroup show -r $mount_point | awk '{print \$1,\$4}'");
+            my $output_btrfs_qgroups = script_output("btrfs qgroup show -r $mount_point | awk '{print \$1,\$4}'");
             foreach my $subvolume (@{$partition->{subvolumes}}) {
                 # Parse id for the subvolume path
                 (my $subvolume_id) = ($output_btrfs_subvolumes =~ /ID\s*([0-9]*).*?$subvolume->{path}/);

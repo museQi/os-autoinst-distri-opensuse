@@ -19,7 +19,6 @@ use warnings;
 use testapi;
 use utils;
 use version_utils qw(is_sle is_public_cloud);
-use publiccloud::ssh_interactive;
 use registration;
 
 our @EXPORT = qw(
@@ -32,41 +31,15 @@ our @EXPORT = qw(
   is_azure
   is_gce
   is_container_host
+  is_hardened
+  is_embargo_update
   registercloudguest
   register_addon
   register_openstack
   register_addons_in_pc
-  select_host_console
+  gcloud_install
+  prepare_ssh_tunnel
 );
-
-# Select console on the test host, if force is set, the interactive session will
-# be destroyed. If called in TUNNELED environment, this function die.
-#
-# select_host_console(force => 1)
-#
-sub select_host_console {
-    my (%args) = @_;
-    $args{force} //= 0;
-    my $tunneled = get_var('TUNNELED');
-
-    if ($tunneled && check_var('_SSH_TUNNELS_INITIALIZED', 1)) {
-        die("Called select_host_console but we are in TUNNELED mode") unless ($args{force});
-
-        opensusebasetest::select_serial_terminal();
-        ssh_interactive_leave();
-
-        select_console('tunnel-console', await_console => 0);
-        send_key 'ctrl-c';
-        send_key 'ret';
-
-        set_var('_SSH_TUNNELS_INITIALIZED', 0);
-        opensusebasetest::clear_and_verify_console();
-        save_screenshot;
-    }
-    set_var('TUNNELED', 0) if $tunneled;
-    opensusebasetest::select_serial_terminal();
-    set_var('TUNNELED', $tunneled) if $tunneled;
-}
 
 # Get the current UTC timestamp as YYYY/mm/dd HH:MM:SS
 sub utc_timestamp {
@@ -121,35 +94,13 @@ sub deregister_addon {
 sub registercloudguest {
     my ($instance) = @_;
     my $regcode = get_required_var('SCC_REGCODE');
-    my $remote = $instance->username . '@' . $instance->public_ip;
-    # not all images currently have registercloudguest pre-installed .
-    # in such a case,we need to regsiter against SCC and install registercloudguest with all needed dependencies and then
-    # unregister and re-register with registercloudguest
-    if ($instance->run_ssh_command(cmd => "sudo which registercloudguest > /dev/null; echo \"registercloudguest\$?\" ", proceed_on_failure => 1) =~ m/registercloudguest1/) {
-        $instance->retry_ssh_command(cmd => "sudo SUSEConnect -r $regcode", timeout => 420, retry => 3, delay => 120);
-        register_addon($remote, 'pcm');
-        my $install_packages = 'cloud-regionsrv-client';    # contains registercloudguest binary
-        if (is_azure()) {
-            $install_packages .= ' cloud-regionsrv-client-plugin-azure regionServiceClientConfigAzure regionServiceCertsAzure';
-        }
-        elsif (is_ec2()) {
-            $install_packages .= ' cloud-regionsrv-client-plugin-ec2 regionServiceClientConfigEC2 regionServiceCertsEC2';
-        }
-        elsif (is_gce()) {
-            $install_packages .= ' cloud-regionsrv-client-plugin-gce regionServiceClientConfigGCE regionServiceCertsGCE';
-        }
-        else {
-            die 'Unexpected provider ' . get_var('PUBLIC_CLOUD_PROVIDER');
-        }
-        $instance->run_ssh_command(cmd => "sudo zypper -q -n in $install_packages", timeout => 420);
-        $instance->run_ssh_command(cmd => "sudo registercloudguest --clean");
-    }
-    # Check what version of registercloudguest binary we use
-    $instance->run_ssh_command(cmd => "sudo rpm -qa cloud-regionsrv-client", proceed_on_failure => 1);
-    # Register the system
+    my $path = is_sle('>15') && is_sle('<15-SP3') ? '/usr/sbin/' : '';
+    my $suseconnect = $path . get_var("PUBLIC_CLOUD_SCC_ENDPOINT", "registercloudguest");
     my $cmd_time = time();
-    $instance->retry_ssh_command(cmd => "sudo registercloudguest -r $regcode", timeout => 420, retry => 3, delay => 120);
-    record_info('registercloudguest time', 'The command registercloudguest took ' . (time() - $cmd_time) . ' seconds.');
+    # Check what version of registercloudguest binary we use
+    $instance->ssh_script_run(cmd => "rpm -qa cloud-regionsrv-client");
+    $instance->ssh_script_retry(cmd => "sudo $suseconnect -r $regcode", timeout => 420, retry => 3, delay => 120);
+    record_info('registeration time', 'The registration took ' . (time() - $cmd_time) . ' seconds.');
 }
 
 sub register_addons_in_pc {
@@ -172,7 +123,7 @@ sub register_openstack {
 
     my $cmd = "sudo SUSEConnect -r $regcode";
     $cmd .= " --url $fake_scc" if $fake_scc;
-    $instance->run_ssh_command(cmd => $cmd, timeout => 700, retry => 5);
+    $instance->ssh_assert_script_run(cmd => $cmd, timeout => 700, retry => 5);
 }
 
 # Check if we are a BYOS test run
@@ -206,6 +157,17 @@ sub is_container_host() {
     return is_public_cloud && get_var('FLAVOR') =~ 'CHOST';
 }
 
+sub is_hardened() {
+    return is_public_cloud && get_var('FLAVOR') =~ 'Hardened';
+}
+
+sub is_embargo_update {
+    my ($incident) = @_;
+    script_retry("curl -sSf https://build.suse.de/attribs/SUSE:Maintenance:$incident -o /tmp/$incident.txt");
+    return 1 if (script_run("grep 'OBS:EmbargoDate' /tmp/$incident.txt") == 0);
+    return 0;
+}
+
 sub define_secret_variable {
     my ($var_name, $var_value) = @_;
     script_run("set -a");
@@ -217,10 +179,13 @@ sub define_secret_variable {
 # Get credentials from the Public Cloud micro service, which requires user
 # and password. The resulting json will be stored in a file.
 sub get_credentials {
-    my ($output_json) = @_;
-    my $url = get_required_var('PUBLIC_CLOUD_CREDENTIALS_URL');
+    my ($url_sufix, $output_json) = @_;
+    my $base_url = get_required_var('PUBLIC_CLOUD_CREDENTIALS_URL');
+    my $namespace = get_required_var('PUBLIC_CLOUD_NAMESPACE');
     my $user = get_required_var('_SECRET_PUBLIC_CLOUD_CREDENTIALS_USER');
     my $pwd = get_required_var('_SECRET_PUBLIC_CLOUD_CREDENTIALS_PWD');
+    my $url = $base_url . '/' . $namespace . '/' . $url_sufix;
+
     my $url_auth = Mojo::URL->new($url)->userinfo("$user:$pwd");
     my $ua = Mojo::UserAgent->new;
     $ua->insecure(1);
@@ -233,6 +198,77 @@ sub get_credentials {
         assert_script_run('curl ' . autoinst_url . '/files/creds.json -o ' . $output_json);
     }
     return $data_structure;
+}
+
+=head2 gcloud_install
+    gcloud_install($url, $dir, $timeout)
+
+This function is used to install the gcloud CLI
+for the GKE Google Cloud.
+
+From $url we get the full package and install it
+in $dir local folder as a subdir of /root.
+Defaults are available for a simple call without parameters:
+    gcloud_install()
+
+=cut
+
+sub gcloud_install {
+    my %args = @_;
+    my $url = $args{url} || 'sdk.cloud.google.com';
+    my $dir = $args{dir} || 'google-cloud-sdk';
+    my $timeout = $args{timeout} || 700;
+
+    zypper_call("in curl tar gzip", $timeout);
+
+    assert_script_run("export CLOUDSDK_CORE_DISABLE_PROMPTS=1");
+    assert_script_run("curl $url | bash", $timeout);
+    assert_script_run("echo . /root/$dir/completion.bash.inc >> ~/.bashrc");
+    assert_script_run("echo . /root/$dir/path.bash.inc >> ~/.bashrc");
+    assert_script_run("source ~/.bashrc");
+
+    record_info('GCE', script_output('gcloud version'));
+}
+
+sub prepare_ssh_tunnel {
+    my $instance = shift;
+
+    # configure ssh client
+    my $ssh_config_url = data_url('publiccloud/ssh_config');
+    assert_script_run("curl $ssh_config_url -o ~/.ssh/config");
+
+    # Create the ssh alias
+    assert_script_run(sprintf(q(echo -e 'Host sut\n  Hostname %s' >> ~/.ssh/config), $instance->public_ip));
+
+    # Copy SSH settings also for normal user
+    assert_script_run("install -o $testapi::username -g users -m 0700 -dD /home/$testapi::username/.ssh");
+    assert_script_run("install -o $testapi::username -g users -m 0600 ~/.ssh/* /home/$testapi::username/.ssh/");
+
+    # Skip setting root password for img_proof, because it expects the root password to NOT be set
+    $instance->ssh_assert_script_run(qq(echo -e "$testapi::password\\n$testapi::password" | sudo passwd root));
+
+    # Permit root passwordless login over SSH
+    $instance->ssh_assert_script_run('sudo cat /etc/ssh/sshd_config');
+    $instance->ssh_assert_script_run('sudo sed -i "s/PermitRootLogin no/PermitRootLogin prohibit-password/g" /etc/ssh/sshd_config');
+    $instance->ssh_assert_script_run('sudo sed -iE "/^AllowTcpForwarding/c\AllowTcpForwarding yes" /etc/ssh/sshd_config') if (is_hardened());
+    $instance->ssh_assert_script_run('sudo systemctl reload sshd');
+
+    # Copy SSH settings for remote root
+    $instance->ssh_assert_script_run('sudo install -o root -g root -m 0700 -dD /root/.ssh');
+    $instance->ssh_assert_script_run(sprintf("sudo install -o root -g root -m 0644 /home/%s/.ssh/authorized_keys /root/.ssh/", $instance->{username}));
+
+    # Create remote user and set him a password
+    my $path = (is_sle('>15') && is_sle('<15-SP3')) ? '/usr/sbin/' : '';
+    $instance->ssh_assert_script_run("test -d /home/$testapi::username || sudo ${path}useradd -m $testapi::username");
+    $instance->ssh_assert_script_run(qq(echo -e "$testapi::password\\n$testapi::password" | sudo passwd $testapi::username));
+
+    # Copy SSH settings for remote user
+    $instance->ssh_assert_script_run("sudo install -o $testapi::username -g users -m 0700 -dD /home/$testapi::username/.ssh");
+    $instance->ssh_assert_script_run("sudo install -o $testapi::username -g users -m 0644 ~/.ssh/authorized_keys /home/$testapi::username/.ssh/");
+
+    # Create log file for ssh tunnel
+    my $ssh_sut = '/var/tmp/ssh_sut.log';
+    assert_script_run "touch $ssh_sut; chmod 777 $ssh_sut";
 }
 
 1;

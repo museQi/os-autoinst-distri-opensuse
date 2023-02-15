@@ -12,13 +12,14 @@ use base "Exporter";
 use Exporter;
 
 use testapi;
-use utils qw(zypper_call);
+use utils qw(zypper_call handle_screen);
 use JSON;
 use List::Util qw(max);
 use version_utils 'is_sle';
 
 our @EXPORT
-  = qw(capture_state check_automounter is_patch_needed add_test_repositories ssh_add_test_repositories remove_test_repositories advance_installer_window get_patches check_patch_variables);
+  = qw(capture_state check_automounter is_patch_needed add_test_repositories disable_test_repositories enable_test_repositories
+  ssh_add_test_repositories remove_test_repositories advance_installer_window get_patches check_patch_variables);
 use constant ZYPPER_PACKAGE_COL => 1;
 use constant OLD_ZYPPER_STATUS_COL => 4;
 use constant ZYPPER_STATUS_COL => 5;
@@ -79,6 +80,7 @@ sub add_test_repositories {
     my $oldrepo = get_var('PATCH_TEST_REPO');
     my @repos = split(/,/, get_var('MAINT_TEST_REPO', ''));
     my $gpg = get_var('BUILD') =~ m/^MR:/ ? "-G" : "";
+    my $system_repos = script_output('zypper lr -u');
     # Be carefull. If you have defined both variables, the PATCH_TEST_REPO variable will always
     # have precedence over MAINT_TEST_REPO. So if MAINT_TEST_REPO is required to be installed
     # please be sure that the PATCH_TEST_REPO is empty.
@@ -90,6 +92,8 @@ sub add_test_repositories {
         zypper_call('--gpg-auto-import-keys ref', timeout => 1400, exitcode => [0, 106]);
     } else {
         for my $var (@repos) {
+            # don't add repo when it's already present
+            next if $system_repos =~ /$var/;
             zypper_call("--no-gpg-checks ar -f $gpg -n 'TEST_$counter' $var 'TEST_$counter'");
             $counter++;
         }
@@ -98,12 +102,43 @@ sub add_test_repositories {
     if (is_sle('=12-SP2')) {
         my $arch = get_var('ARCH');
         my $url = "http://dist.suse.de/ibs/SUSE/Updates/SLE-SERVER/12-SP2-LTSS-ERICSSON/$arch/update/";
-        zypper_call("--no-gpg-checks ar -f $gpg $url '12-SP2-LTSS-ERICSSON-Updates'");
+        # don't add repo when it's already present
+        unless ($system_repos =~ /$url/) {
+            zypper_call("--no-gpg-checks ar -f $gpg $url '12-SP2-LTSS-ERICSSON-Updates'");
+        }
     }
-
+    if (is_sle('=12-SP3')) {
+        my $arch = get_var('ARCH');
+        my $url = "http://dist.suse.de/ibs/SUSE/Updates/SLE-SERVER/12-SP3-LTSS-TERADATA/$arch/update/";
+        # don't add repo when it's already present
+        unless ($system_repos =~ /$url/) {
+            zypper_call("--no-gpg-checks ar -f $gpg $url '12-SP3-LTSS-TERADATA-Updates'");
+        }
+    }
     # refresh repositories, inf 106 is accepted because repositories with test
     # can be removed before test start
     zypper_call('ref', timeout => 1400, exitcode => [0, 106]);
+
+    # return the count of repos-1 because counter is increased also on last cycle
+    return --$counter;
+}
+
+sub disable_test_repositories {
+    my $count = scalar(shift);
+
+    record_info 'Disable update repos';
+    for my $i (0 .. $count) {
+        zypper_call("mr -d -G 'TEST_$i'");
+    }
+}
+
+sub enable_test_repositories {
+    my $count = scalar(shift);
+
+    record_info 'Enable update repos';
+    for my $i (0 .. $count) {
+        zypper_call("mr -e -G 'TEST_$i'");
+    }
 }
 
 # Function that will add all test repos to SSH guest
@@ -124,7 +159,7 @@ sub ssh_add_test_repositories {
     }
     # refresh repositories, inf 106 is accepted because repositories with test
     # can be removed before test start
-    my $ret = script_run("ssh root\@$host 'zypper -n ref'", 240);
+    my $ret = script_run("ssh root\@$host 'zypper -n --gpg-auto-import-keys ref'", 240);
     die "Zypper failed with $ret" if ($ret != 0 && $ret != 106);
 }
 
@@ -140,15 +175,26 @@ sub advance_installer_window {
     my $build = get_var('BUILD');
 
     send_key $cmd{next};
-    die 'Unable to create repository' if check_screen('unable-to-create-repo', 5);
+    my %handlers;
+
+    $handlers{$screenName} = sub { 1 };
+    $handlers{'unable-to-create-repo'} = sub {
+        die 'Unable to create repository';
+    };
+    $handlers{'cannot-access-installation-media'} = sub {
+        send_key "alt-y";
+        return 0;
+    };
+
     if ($build =~ m/^MR:/) {
-        if (check_screen("import-untrusted-gpg-key", 20)) {
+        $handlers{'import-untrusted-gpg-key'} = sub {
             send_key "alt-t";
-        }
+            return 0;
+        };
     }
-    unless (check_screen "$screenName", 60) {
-        my $key = check_screen('cannot-access-installation-media') ? "alt-y" : "$cmd{next}";
-        send_key_until_needlematch $screenName, $key, 5, 60;
+
+    unless (handle_screen([keys %handlers], \%handlers, assert => 0, timeout => 60)) {
+        send_key_until_needlematch $screenName, $cmd{next}, 6, 60;
         record_soft_failure 'Retry most probably due to network problems poo#52319 or failed next click';
     }
 }

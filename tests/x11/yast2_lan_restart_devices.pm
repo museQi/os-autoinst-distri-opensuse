@@ -15,7 +15,7 @@
 # - Check the network status for each device (if network was restarted after
 # changes made)
 # - Delete all created devices
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 # Tags: fate#318787 poo#11450
 
 use base 'y2_installbase';
@@ -100,7 +100,7 @@ sub select_special_device_tab {
     send_key 'tab';
     send_key 'tab';
     send_key 'home';
-    send_key_until_needlematch ["yast2_lan_device_${device}_selected", "yast2_lan_device_bsc1111483"], 'down', 5;
+    send_key_until_needlematch ["yast2_lan_device_${device}_selected", "yast2_lan_device_bsc1111483"], 'down', 6;
     return if check_bsc1111483;
     send_key 'alt-i';    # Edit NIC
     assert_screen 'yast2_lan_network_card_setup';
@@ -129,7 +129,7 @@ sub delete_device {
     send_key 'tab';
     send_key 'tab';
     send_key 'home';
-    send_key_until_needlematch ["yast2_lan_device_${device}_selected", "yast2_lan_device_bsc1111483"], 'down', 5;
+    send_key_until_needlematch ["yast2_lan_device_${device}_selected", "yast2_lan_device_bsc1111483"], 'down', 6;
     return if check_bsc1111483;
     send_key 'alt-t';    # Delete NIC
     wait_still_screen;

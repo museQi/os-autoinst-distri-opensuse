@@ -17,6 +17,7 @@ use testapi;
 use utils;
 use strict;
 use warnings;
+use Utils::Logging qw(tar_and_upload_log export_logs);
 
 =head2 execute_script
 
@@ -25,6 +26,7 @@ use warnings;
 Execute C<$script> with arguments C<$scriptargs> and upload STDERR and STDOUT as script logs.
 The maximum execution time of the script is defined by C<$timeout>.
 =cut
+
 sub execute_script {
     my ($self, $script, $scriptargs, $timeout) = @_;
     assert_script_run("./$script $scriptargs 2>&1 | tee --append logs/$script.log", timeout => $timeout);
@@ -38,12 +40,13 @@ sub execute_script {
 Collect and upload logs for investigation. cleanup test suite files.
 
 =cut
+
 sub upload_logs_and_cleanup {
     my ($self) = @_;
-    $self->export_logs();
+    export_logs();
 
     my $test_name = get_var('IBM_TESTSET') . get_var('IBM_TESTS');
-    $self->tar_and_upload_log("/root/$test_name/logs/", "/tmp/$test_name.tar.bz2");
+    tar_and_upload_log("/root/$test_name/logs/", "/tmp/$test_name.tar.bz2");
 }
 
 =head2 post_fail_hook
@@ -53,6 +56,7 @@ sub upload_logs_and_cleanup {
 Executed when a module fails.
 
 =cut
+
 sub post_fail_hook {
     my ($self) = @_;
     $self->upload_logs_and_cleanup();
@@ -65,6 +69,7 @@ sub post_fail_hook {
 Executed when a module finishes.
 
 =cut
+
 sub post_run_hook {
     my ($self) = @_;
     $self->upload_logs_and_cleanup();
@@ -78,6 +83,7 @@ Executed before method run.
 Fetch the testcase and common libraries from openQA server.
 
 =cut
+
 sub pre_run_hook {
     my ($self) = @_;
     my $path = data_url("s390x");

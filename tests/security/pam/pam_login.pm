@@ -2,30 +2,41 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Summary: PAM tests for login, user login should fail without authentication
-# Maintainer: rfan1 <richard.fan@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#70345, tc#1767577
 
 use base 'opensusebasetest';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
+use version_utils;
 
 sub run {
-    my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Define the user and password, which are already configured in previous milestone
     my $user = 'suse';
     my $passwd = 'susetesting';
+    my $pam_sshd_tw = '';
+    my $pam_login_tw = '';
 
     # Modify the login/sshd files to set the PAM authentication
     my $deny_user_file = '/etc/deniedusers';
     my $pam_sshd = '/etc/pam.d/sshd';
-    my $pam_login = '/etc/pam.d/login';
     my $pam_sshd_bak = '/tmp/sshd_bak';
     my $pam_login_bak = '/tmp/login_bak';
-    my $pam_sshd_tw = '/usr/etc/pam.d/sshd';
-    my $pam_login_tw = '/usr/etc/pam.d/login';
+    my $pam_login = '/etc/pam.d/login';
+    if (is_sle || is_leap) {
+        $pam_sshd_tw = '/usr/etc/pam.d/sshd';
+    } else {
+        $pam_sshd_tw = '/usr/lib/pam.d/sshd';
+    }
+    if (is_sle || is_leap) {
+        $pam_login_tw = '/usr/etc/pam.d/login';
+    } else {
+        $pam_login_tw = '/usr/lib/pam.d/login';
+    }
     my $ret_sshd = script_run("[[ -e $pam_sshd ]]");
     my $ret_login = script_run("[[ -e $pam_login ]]");
     assert_script_run "echo $user > $deny_user_file";

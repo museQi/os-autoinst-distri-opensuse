@@ -8,7 +8,7 @@
 # Maintainer: Pavel Dostal <pdostal@suse.cz>
 
 use Mojo::Base 'publiccloud::basetest';
-use publiccloud::ssh_interactive;
+use publiccloud::ssh_interactive 'select_host_console';
 use publiccloud::utils;
 use testapi;
 use utils;
@@ -16,8 +16,7 @@ use utils;
 sub run {
     my ($self, $args) = @_;
     select_host_console(force => 1);
-    $args->{my_provider}->cleanup();
+    $args->{my_provider}->cleanup($args);
 }
 
 1;
-

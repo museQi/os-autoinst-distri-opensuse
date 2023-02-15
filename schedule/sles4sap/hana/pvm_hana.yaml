@@ -13,7 +13,6 @@ vars:
 schedule:
   - installation/bootloader
   - installation/welcome
-  - installation/accept_license
   - installation/scc_registration
   - '{{multipath}}'
   - '{{sles4sap12_product}}'
@@ -64,6 +63,12 @@ conditional_schedule:
         - installation/system_role
         - installation/sles4sap_product_installation_mode
       15-SP3:
+        - installation/system_role
+        - installation/sles4sap_product_installation_mode
+      15-SP4:
+        - installation/system_role
+        - installation/sles4sap_product_installation_mode
+      15-SP5:
         - installation/system_role
         - installation/sles4sap_product_installation_mode
   sles4sap12_desktop:

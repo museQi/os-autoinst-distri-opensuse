@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2021 SUSE LLC
+# Copyright 2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -12,6 +12,7 @@
 
 use Mojo::Base 'consoletest';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use version_utils qw(is_sle);
 use registration qw(add_suseconnect_product get_addon_fullname);
 use publiccloud::utils qw(is_azure);
@@ -129,11 +130,10 @@ sub get_unused_nvme_device {
 }
 
 sub run {
-    my $self = shift;
     my $device = get_var("XFS_TEST_DEVICE", "/dev/sdb");
     my $mnt_xfs = "/mnt/xfstests/xfs";
     my $mnt_scratch = "/mnt/scratch";
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     record_info("lsblk", script_output("lsblk"));    # debug output
 

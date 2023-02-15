@@ -26,7 +26,7 @@
 # - Create and delete a test folder inside the share
 # - Switch back to text console
 # - Check audit.log for error messages related to smbd
-# Maintainer: llzhao <llzhao@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#48776, tc#1695952
 
 use base apparmortest;
@@ -35,6 +35,7 @@ use warnings;
 use testapi;
 use utils;
 use version_utils qw(is_sle);
+use Utils::Architectures;
 
 # Setup samba server
 sub samba_server_setup {
@@ -51,7 +52,7 @@ sub samba_server_setup {
     send_key "ctrl-a";
     send_key "delete";
     type_string("WORKGROUP");
-    send_key_until_needlematch("samba-server-configuration", 'alt-n', 10, 2);
+    send_key_until_needlematch("samba-server-configuration", 'alt-n', 11, 2);
     send_key "alt-s";
     assert_screen("samba-server-configuration-shares");
     send_key "alt-a";
@@ -96,30 +97,25 @@ sub samba_client_access {
 
     # Connect to samba server
     assert_and_click("nautilus-other-locations");
-    send_key_until_needlematch("nautilus-connect-to-server", 'tab', 20, 2);
-    my $smb_str = is_sle('=15-SP3') ? "smb://$testuser:$pw\@$ip/$testdir" : "smb://$ip";
-    type_string("$smb_str");
+    send_key_until_needlematch("nautilus-connect-to-server", 'tab', 21, 2);
+    type_string("smb://$ip");
     send_key "ret";
     wait_still_screen(2);
 
-    if (!is_sle('=15-SP3')) {
-        # Search the shared dir
-        send_key_until_needlematch("nautilus-sharedir-search", 'ctrl-f', 5, 2);
-        type_string("$testdir");
-        assert_screen("nautilus-sharedir-selected");
-        send_key "ret";
-    }
+    # Search the shared dir
+    send_key_until_needlematch("nautilus-sharedir-search", 'ctrl-f', 6, 2);
+    type_string("$testdir");
+    assert_screen("nautilus-sharedir-selected");
+    send_key "ret";
 
     # Input password for samb user
     assert_screen("nautilus-selected-sharedir-access-passwd");
-    if (!is_sle('=15-SP3')) {
-        send_key_until_needlematch("nautilus-registered-user-login", 'down', 5, 2);
-        send_key "tab";
-        send_key "ctrl-a";
-        send_key "delete";
-        type_string("$testuser");
-        send_key "ret";
-    }
+    send_key_until_needlematch("nautilus-registered-user-login", 'down', 6, 2);
+    send_key "tab";
+    send_key "ctrl-a";
+    send_key "delete";
+    type_string("$testuser");
+    send_key "ret";
     send_key "ctrl-a";
     send_key "delete";
     type_string("WORKGROUP");
@@ -130,13 +126,18 @@ sub samba_client_access {
     send_key "ret";
     assert_screen("nautilus-sharedir-opened");
 
-    # Do some operations, e.g., create a test folder then delete it
-    assert_and_click("nautilus-open-menu");
-    assert_and_click("nautilus-new-folder");
+    # Create new folder
+    if (is_s390x()) {
+        # on s390x the keyboard shortcut doesn't always work, that's why we use needles instead.
+        assert_and_click("nautilus-empty-view-dclick", button => "right");
+        assert_and_click("nautilus-create-folder");
+    } else {
+        send_key "shift-ctrl-n";
+    }
     assert_screen("nautilus-folder-name-input-box");
-    type_string("sub-testdir", wait_screen_changes => 10);
+    type_string("sub-testdir", wait_screen_change => 10);
     send_key "ret";
-    send_key_until_needlematch("nautilus-sharedir-delete", "delete", 5, 2);
+    send_key_until_needlematch("nautilus-sharedir-delete", "delete", 6, 2);
     send_key "ret";
     assert_screen("nautilus-sharedir-deleted");
 
@@ -194,8 +195,8 @@ sub run {
     my $script_output = script_output("cat $audit_log");
     if ($script_output =~ m/type=AVC .*apparmor=.*DENIED.* profile=.*/sx) {
         record_info("ERROR", "There are denied records found in $audit_log");
-        record_soft_failure('bsc#1196850') if is_sle('=15-SP3');
-        $self->result('fail') unless is_sle('=15-SP3');
+        record_soft_failure('bsc#1196850') if is_sle('>=15-SP3');
+        $self->result('fail') unless is_sle('>=15-SP3');
     }
 
     # Upload logs for reference

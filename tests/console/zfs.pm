@@ -28,6 +28,8 @@ my $disksize = "100M";    # Size of the test disks
 sub get_repository() {
     if (is_tumbleweed) {
         return 'https://download.opensuse.org/repositories/filesystems/openSUSE_Tumbleweed/filesystems.repo';
+    } elsif (is_leap("=15.5")) {
+        return 'https://download.opensuse.org/repositories/filesystems/15.5/filesystems.repo';
     } elsif (is_leap("=15.4")) {
         return 'https://download.opensuse.org/repositories/filesystems/15.4/filesystems.repo';
     } elsif (is_leap("=15.3")) {
@@ -52,13 +54,16 @@ sub check_available {
 }
 
 sub install_zfs {
-    my $repo = get_repository();
-    if (!check_available($repo)) {
-        my $msg = "Sorry, zfs repository is not (yet) available for this distribution";
-        record_soft_failure($msg);
-        return 0;
+    my $repo = get_var("ZFS_REPOSITORY", "");
+    if ($repo eq "") {
+        $repo = get_repository();
+        if (!check_available($repo)) {
+            my $msg = "Sorry, zfs repository is not (yet) available for this distribution";
+            record_info('Softfail', $msg, result => 'softfail');
+            return 0;
+        }
     }
-    # TODO: Replace -G (--no-gpgcheck) with something more sane
+    record_info("zfs repository", "Using repository for zfs:\n$repo");
     zypper_call("addrepo -fG $repo");
     zypper_call('refresh');
     zypper_call('install zfs');
@@ -71,6 +76,8 @@ sub prepare_disks {
     assert_script_run("fallocate -l $disksize /var/tmp/tank_c.img");
     assert_script_run("fallocate -l $disksize /var/tmp/tank_a2.img");
     assert_script_run("fallocate -l $disksize /var/tmp/dozer.img");
+    assert_script_run("fallocate -l $disksize /var/tmp/niobe_a.img");
+    assert_script_run("fallocate -l $disksize /var/tmp/niobe_b.img");
 }
 
 sub clear_disk {
@@ -81,7 +88,7 @@ sub clear_disk {
 sub corrupt_disk {
     my $disk = shift;
     # dd from /dev/urandom and random is limited to ~30MB per read
-    # seek 100k into the disk so that at least the disk label remains intact
+    # seek at least 100k into the disk so that the disk label remains intact
     assert_script_run("dd if=/dev/urandom of=$disk seek=256k bs=10M count=9 oflag=sync");
     assert_script_run("sync");
 }
@@ -95,7 +102,9 @@ sub cleanup {
 
 sub scrub {
     my $pool = shift;
-    assert_script_run("zpool scrub $pool", timeout => 180);
+    # We may skip scrub operation in case the zpool is currently resilvering.
+    my $in_progress = script_run("zpool status $pool | grep -e 'scan:.*in progress'") == 0;
+    assert_script_run("zpool scrub $pool", timeout => 180) if (!$in_progress);
     # Wait for scrub to finish
     script_retry("zpool status $pool | grep scan | grep -v 'in progress'", delay => 10, retry => 12);
 }
@@ -107,31 +116,33 @@ sub import_pool {
     my $devices = "";
     $devices .= " -d '$_'" foreach (@_);
     assert_script_run("zpool import $devices '$pool'");
-    # ensure the poll is present after importing
+    # ensure the pool is present after importing
     script_retry("zpool list | grep '$pool'", delay => 5, retry => 12);
 }
 
 sub reboot {
     my ($self) = @_;
+    my $console = current_console();    # Restore current console after reboot
     power_action('reboot', textmode => 1);
     $self->wait_boot(bootloader_time => 300);
-    select_console 'root-console';
+    select_console "$console";
 }
 
 sub run {
-    # Preparation
     my $self = shift;
-    $self->select_serial_terminal;
-    select_console 'root-console';
     return unless (install_zfs());    # Possible softfailure if module is not yet available (e.g. new Leap version)
     assert_script_run('modprobe zfs');
     prepare_disks();
 
     ## Prepare test pools
-    # Create zfs test pools
+    # Create zfs test pools:
+    # * tank is a raidz consisting of 3 drives
+    # * dozer is a single disk pool
+    # * niobe is a mirrored pool consisting of 2 drives
     assert_script_run('zpool create tank raidz /var/tmp/tank_{a,b,c}.img -o ashift=13');
     assert_script_run('zpool list | grep tank');
     assert_script_run('zpool create dozer /var/tmp/dozer.img -o ashift=12');
+    assert_script_run('zpool create niobe mirror /var/tmp/niobe_{a,b}.img -o ashift=12');
     assert_script_run('zpool list | grep dozer');
     assert_script_run('cd /tank/; ls');
     # Put data in tank
@@ -141,6 +152,16 @@ sub run {
     scrub('tank');
     assert_script_run('zpool status tank | grep state | grep ONLINE');
     script_run('zpool status tank');
+    ## Test custom datasets
+    assert_script_run('mkdir -p /mnt/dozer /mnt/niobe/backup');
+    assert_script_run('zfs create dozer/dataset');
+    assert_script_run('zfs set mountpoint=/mnt/dozer dozer/dataset');
+    assert_script_run('zfs create niobe/backup');
+    assert_script_run('zfs set mountpoint=/mnt/niobe/backup niobe/backup');
+    assert_script_run('zfs set compression=on dozer/dataset');
+    assert_script_run('zfs get compression dozer/dataset | grep "compression" | grep "on"');
+    assert_script_run('cp Big_Buck_Bunny_8_seconds_bird_clip.ogv /mnt/dozer/Big_Buck_Bunny_8_seconds_bird_clip.ogv');
+    assert_script_run('cp Big_Buck_Bunny_8_seconds_bird_clip.ogv /mnt/niobe/backup/Big_Buck_Bunny_8_seconds_bird_clip.ogv');
 
     ## Test raidz capability by corruping a disk
     corrupt_disk('/var/tmp/tank_a.img');
@@ -158,7 +179,7 @@ sub run {
     clear_disk('/var/tmp/tank_a.img');
     assert_script_run('zpool replace tank /var/tmp/tank_a.img');
     scrub('tank');
-    assert_script_run('zpool status tank | grep state | grep ONLINE');
+    script_retry('zpool status tank | grep state | grep ONLINE', delay => 3, retry => 3);
     # Display status for debugging purposes
     script_run('zpool status tank');
 
@@ -241,9 +262,12 @@ sub run {
     # Since zpool by default only searches for disks but not files, we need to point it to the disk files manually
     import_pool("tank", "/var/tmp/tank_a.img", "/var/tmp/tank_b.img", "/var/tmp/tank_c.img");
     import_pool("dozer", "/var/tmp/dozer.img");
+    import_pool("niobe", "/var/tmp/niobe_a.img", "/var/tmp/niobe_b.img");
     assert_script_run('stat /tank/Big_Buck_Bunny_8_seconds_bird_clip.ogv');
     assert_script_run('cd /tank; md5sum -c /var/tmp/Big_Buck_Bunny_8_seconds_bird_clip.ogv.md5sum');
     assert_script_run('! stat /tank/test_unzip.zip');
+    assert_script_run('cd /mnt/dozer; md5sum -c /var/tmp/Big_Buck_Bunny_8_seconds_bird_clip.ogv.md5sum');
+    assert_script_run('cd /mnt/niobe/backup/; md5sum -c /var/tmp/Big_Buck_Bunny_8_seconds_bird_clip.ogv.md5sum');
     # Test snapshot after reboot
     assert_script_run('zfs rollback -r tank@third');
     assert_script_run('stat /tank/BBB_8_seconds_bird_clip.ogv');
@@ -268,6 +292,11 @@ sub post_fail_hook {
 
 sub post_run_hook {
     cleanup();
+}
+
+sub test_flags {
+    # Test is rather intrusive, so to be sure to not disturb the rest of the test run, do a rollback
+    return {always_rollback => 1};
 }
 
 1;

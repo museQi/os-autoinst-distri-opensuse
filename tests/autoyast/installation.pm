@@ -20,7 +20,7 @@
 #   - Handle warning pop ups
 #   - Handle autoyast errors during second stage
 #   - Handle grub to boot on local disk (aarch64)
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use strict;
 use warnings;
@@ -289,9 +289,10 @@ sub run {
         }
         elsif (match_has_tag('nvidia-validation-failed')) {
             # nvidia repositories are unstable and really not needed for anything
-            record_info("nVidia", "nVidia repository is broken");
-            send_key 'alt-y';
+            record_info("NVIDIA", "NVIDIA repository is broken");
             wait_still_screen { send_key 'alt-o' };
+            send_key 'alt-n';
+            $num_errors++;
         }
         elsif (match_has_tag('package-notification')) {
             send_key 'alt-o';

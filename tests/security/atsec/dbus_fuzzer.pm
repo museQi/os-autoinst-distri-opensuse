@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Run 'DBus fuzzer' test case of ATSec test suite
-# Maintainer: xiaojing.liu <xiaojing.liu@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#109978
 
 use base 'consoletest';
@@ -73,12 +73,6 @@ sub run {
 
         # Skip the DBus has been tested. Some DBus names are in 'session bus' and 'system bus'.
         next if $test_result{$dbus};
-
-        if ($dbus eq 'org.freedesktop.login1') {
-            record_soft_failure('poo#110071', 'We do NOT test org.freedesktop.login1 due to poo#110071');
-            $test_result{$dbus} = 'softfail';
-            next;
-        }
 
         $test_result{$dbus} = 'PASS';
         script_run("./dfuzzer -v -n $dbus > $log_file 2>&1", timeout => 300);

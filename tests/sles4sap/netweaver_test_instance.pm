@@ -5,10 +5,11 @@
 
 # Summary: Checks NetWeaver installation as performed by sles4sap/netweaver_install
 # Requires: sles4sap/netweaver_install, ENV variables INSTANCE_SID, INSTANCE_TYPE and INSTANCE_ID
-# Maintainer: QE-SAP <qe-sap@suse.de>, Alvaro Carvajal <acarvajal@suse.de>
+# Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base "sles4sap";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use strict;
 use warnings;
 use version_utils 'is_upgrade';
@@ -17,11 +18,7 @@ sub run {
     my ($self) = @_;
     my $pscmd = $self->set_ps_cmd(get_required_var('INSTANCE_TYPE'));
 
-    $self->select_serial_terminal;
-
-    # First, upload the installation logs
-    # NOTE: done here because there are multiple installation paths
-    $self->upload_nw_install_log;
+    select_serial_terminal;
 
     # On upgrade scenarios, hostname and IP address could have changed from the original
     # installation of NetWeaver. This ensures the current hostname can be resolved

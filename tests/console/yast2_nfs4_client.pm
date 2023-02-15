@@ -24,15 +24,13 @@ use warnings;
 use utils qw(zypper_call systemctl script_retry);
 use version_utils;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use lockapi;
 use mm_network;
 use nfs_common;
 
 sub run {
-    #
-    # Preparation
-    #
-    select_console 'root-console';
+    select_serial_terminal;
 
     setup_static_mm_network('10.0.2.102/24');
 
@@ -44,6 +42,9 @@ sub run {
     # add comments into fstab and save current fstab bsc#429326
     assert_script_run 'sed -i \'5i# test comment\' /etc/fstab';
     assert_script_run 'cat /etc/fstab > fstab_before';
+
+    # Fron now we need needles
+    select_console 'root-console';
 
     #
     # YaST nfs-client execution
@@ -78,6 +79,9 @@ sub run {
     sleep 1;
     save_screenshot;
     yast2_client_exit($module_name);
+
+    # From now we can use serial terminal
+    select_serial_terminal;
 
     mount_export();
 

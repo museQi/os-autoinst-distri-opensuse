@@ -5,7 +5,7 @@
 
 # Summary: The module provides interface to act with Module Registration page
 #
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package Installation::ModuleRegistration::ModuleRegistrationPage;
 use parent 'Installation::Navigation::NavigationBase';
@@ -25,12 +25,20 @@ sub init {
     $self->SUPER::init();
     $self->{chb_hide_dev_versions} = $self->{app}->checkbox({id => 'filter_devel'});
     $self->{rct_items} = $self->{app}->richtext({id => 'items'});
-    $self->{rct_item_containers} = 'sle-module-containers';
+    $self->{rct_item_we} = 'sle-we';
+    $self->{rct_item_ha} = 'sle-ha';
+    $self->{rct_item_base} = 'sle-module-basesystem';
+    $self->{rct_item_contm} = 'sle-module-containers';
     $self->{rct_item_desktop} = 'sle-module-desktop-applications';
-    $self->{rct_item_development} = 'sle-module-development-tools';
+    $self->{rct_item_sdk} = 'sle-module-development-tools';
     $self->{rct_item_legacy} = 'sle-module-legacy';
-    $self->{rct_item_transactional} = 'sle-module-transactional-server';
-    $self->{rct_item_web} = 'sle-module-web-scripting';
+    $self->{rct_item_tsm} = 'sle-module-transactional-server';
+    $self->{rct_item_script} = 'sle-module-web-scripting';
+    $self->{rct_item_python2} = 'sle-module-python2';
+    $self->{rct_item_python3} = 'sle-module-python3';
+    $self->{rct_item_pcm} = 'sle-module-public-cloud';
+    $self->{rct_item_serverapp} = 'sle-module-server-applications';
+    $self->{rct_item_ltss} = 'SLES-LTSS';
     return $self;
 }
 
@@ -66,7 +74,7 @@ sub register_module {
     return $self->{rct_items}->activate_link($module_full_name);
 }
 
-sub register_modules {
+sub register_extension_and_modules {
     my ($self, $modules) = @_;
     $self->register_module($_) for ($modules->@*);
     return $self;

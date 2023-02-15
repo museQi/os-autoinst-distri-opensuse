@@ -4,7 +4,7 @@
 # Summary: Update IBM's Trusted Computing Group Software Stack (TSS) to the latest version.
 #          IBM has tested x86_64, s390x and ppc64le, we only need cover aarch64
 #          This test module covers basic function test
-# Maintainer: rfan1 <richard.fan@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#101088, poo#102792, poo#103086, poo#106501, tc#1769800
 
 use base 'opensusebasetest';
@@ -12,12 +12,11 @@ use base 'consoletest';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils 'zypper_call';
 use version_utils 'is_sle';
 
 sub run {
-    my $self = shift;
-
     select_console('root-console');
 
     # Install emulated tpm server and git-core
@@ -33,7 +32,7 @@ sub run {
     }
 
     # Download the test script, which is imported from link 'https://git.code.sf.net/p/ibmtpm20tss/tssi'
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     assert_script_run('git clone https://git.code.sf.net/p/ibmtpm20tss/tss ibmtpm20tss-tss', timeout => 240);
     assert_script_run('cd ibmtpm20tss-tss/utils');

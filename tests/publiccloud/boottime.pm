@@ -12,7 +12,7 @@ use Mojo::Util 'trim';
 use Data::Dumper;
 use testapi;
 use db_utils;
-use publiccloud::utils qw(select_host_console);
+use publiccloud::ssh_interactive qw(select_host_console);
 
 our $default_analyze_thresholds = {
     # First boot after provisioning
@@ -98,6 +98,10 @@ our $thresholds_by_flavor = {
         blame => $default_blame_thresholds,
     },
     'Azure-Standard-gen2' => {
+        analyze => $default_azure_analyze_thresholds,
+        blame => $default_blame_thresholds,
+    },
+    'Azure-BYOS-ARM' => {
         analyze => $default_azure_analyze_thresholds,
         blame => $default_blame_thresholds,
     },
@@ -302,7 +306,6 @@ sub measure_timings {
     if (get_var('PUBLIC_CLOUD_QAM')) {
         $instance = $args->{my_instance};
         $provider = $args->{my_provider};
-        $self->{provider} = $args->{my_provider};    # required for cleanup
     } else {
         $provider = $self->provider_factory();
         $instance = $self->{my_instance} = $provider->create_instance(check_connectivity => 0);
@@ -349,6 +352,9 @@ sub store_in_db {
     my ($self, $results) = @_;
     my $url = get_var('PUBLIC_CLOUD_PERF_DB_URI');
     return unless ($url);
+    my $db = get_var('PUBLIC_CLOUD_PERF_DB', 'perf');
+    my $token = get_required_var('_PUBLIC_CLOUD_PERF_DB_TOKEN');
+    my $org = get_var('PUBLIC_CLOUD_PERF_DB_ORG', 'qec');
 
     my $tags = {
         instance_type => get_required_var('PUBLIC_CLOUD_INSTANCE_TYPE'),
@@ -368,7 +374,7 @@ sub store_in_db {
         tags => $tags,
         values => $results->{analyze}
     };
-    influxdb_push_data($url, 'publiccloud', $data);
+    influxdb_push_data($url, $db, $org, $token, $data);
 
     for my $type (qw(first soft hard)) {
         $tags->{boottype} = $type;
@@ -377,7 +383,7 @@ sub store_in_db {
             tags => $tags,
             values => $results->{blame}->{$type}
         };
-        influxdb_push_data($url, 'publiccloud', $data);
+        influxdb_push_data($url, $db, $org, $token, $data);
     }
 }
 
@@ -416,7 +422,7 @@ sub run {
     select_host_console();
 
     my $results = $self->measure_timings($args);
-    $self->store_in_db($results);
+    $self->store_in_db($results) if (check_var('_PUBLIC_CLOUD_PERF_PUSH_DATA', 1));
     $self->check_thresholds($results);
 }
 

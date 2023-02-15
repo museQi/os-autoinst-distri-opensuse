@@ -14,8 +14,11 @@ use version_utils qw(is_sle);
 use repo_tools qw(add_qa_head_repo generate_version);
 use utils qw(zypper_call);
 use testapi;
+use version_utils 'check_version';
+use serial_terminal 'select_serial_terminal';
 
 has wicked_version => undef;
+has wpa_supplicant_version => undef;
 has need_key_mgmt => undef;
 has eap_user => 'tester';
 has eap_password => 'test1234';
@@ -140,6 +143,12 @@ sub dhcp_pidfile {
     return "/var/run/dnsmasq_$args{ref_ifc}.pid";
 }
 
+sub dhcp_logfile {
+    my ($self, %args) = @_;
+    $args{ref_ifc} //= $self->ref_bss(bss => $args{bss});
+    return "/var/log/dnsmasq_$args{ref_ifc}.log";
+}
+
 sub restart_dhcp_server {
     my ($self, %args) = @_;
 
@@ -147,8 +156,9 @@ sub restart_dhcp_server {
     $args{sut_ip} //= $self->sut_ip(bss => $args{bss});
 
     $self->stop_dhcp_server(%args);
-    $self->netns_exec(sprintf('dnsmasq --no-resolv --pid-file=%s --interface=%s --except-interface=lo --bind-interfaces --dhcp-range=%s,static --dhcp-host=%s,%s',
-            $self->dhcp_pidfile(%args), $args{ref_ifc}, $args{sut_ip}, $self->sut_hw_addr, $args{sut_ip}));
+    $self->netns_exec(sprintf('dnsmasq --no-resolv --pid-file=%s --log-facility=%s --log-dhcp --interface=%s --except-interface=lo --bind-interfaces --dhcp-authoritative --dhcp-range=%s,static --dhcp-host=%s,%s',
+            $self->dhcp_pidfile(%args), $self->dhcp_logfile(%args), $args{ref_ifc}, $args{sut_ip}, $self->sut_hw_addr, $args{sut_ip}));
+    $self->add_post_log_file($self->dhcp_logfile(%args));
 }
 
 sub stop_dhcp_server {
@@ -189,6 +199,8 @@ sub prepare_phys {
         die("Failed to get netns dummy pid") unless ($output =~ m/BACKGROUND_PROCESS:-(\d+)-/);
         $cmd_set_netns = 'iw phy ' . $self->ref_phy . ' set netns ' . $1;
     }
+    # Delay namespace setup of wlan device to avoid wickedd-nanny error message
+    sleep 3;
     assert_script_run($cmd_set_netns);
 
     assert_script_run('iw dev');
@@ -302,6 +314,32 @@ sub skip_by_supported_key_mgmt {
     return 0;
 }
 
+sub get_wpa_supplicant_version {
+    my $v = script_output(q(rpm -qa 'wpa_supplicant' --qf '%{VERSION}\n'));
+    die("Unable to get wpa_suplicant version '$v'") unless $v =~ /^\d+\.\d+$/;
+    return $v;
+}
+
+sub check_wpa_supplicant_version {
+    my ($self, $query) = @_;
+    return check_version($query, $self->get_wpa_supplicant_version());
+}
+
+sub skip_by_wpa_supplicant_version {
+    my ($self) = @_;
+    return 0 unless $self->wpa_supplicant_version;
+
+    if (!$self->check_wpa_supplicant_version($self->wpa_supplicant_version)) {
+        record_info('SKIP', 'Skip test - wpa_supplicant version does not match ' .
+              $self->wpa_supplicant_version,
+            result => 'softfail');
+        $self->result('skip');
+        return 1;
+    }
+
+    return 0;
+}
+
 sub hostapd_start {
     my ($self, $config, %args) = @_;
     $args{name} //= 'hostapd';
@@ -375,7 +413,7 @@ sub __as_config_array {
     my $param = shift;
     my @ret;
     foreach my $in (__as_array($param)) {
-        my $cfg = {config => '', wicked_version => '>=0.0.0'};
+        my $cfg = {config => '', wicked_version => '>=0.0.0', wpa_supplicant_version => '>=0.0.0'};
         if (ref($in) eq 'HASH') {
             $cfg = {%{$cfg}, %{$in}};
         } else {
@@ -388,9 +426,10 @@ sub __as_config_array {
 
 sub run {
     my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     return if ($self->skip_by_wicked_version());
     return if ($self->skip_by_supported_key_mgmt());
+    return if ($self->skip_by_wpa_supplicant_version());
 
     $self->setup_ref();
 
@@ -404,7 +443,8 @@ sub run {
         for my $ifcfg_wlan (__as_config_array($self->ifcfg_wlan())) {
             $self->hostapd_start($hostapd_conf->{config});
 
-            if ($self->check_wicked_version($ifcfg_wlan->{wicked_version})) {
+            if ($self->check_wicked_version($ifcfg_wlan->{wicked_version}) &&
+                $self->check_wpa_supplicant_version($ifcfg_wlan->{wpa_supplicant_version})) {
                 # Setup sut
                 $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan->{config});
                 $self->wicked_command('ifup', $self->sut_ifc);

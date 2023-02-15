@@ -9,11 +9,14 @@
 # Maintainer: Michael Moese <mmoese@suse.de>, Nick Singer <nsinger@suse.de>, ybonatakis <ybonatakis@suse.com>
 
 use Mojo::Base qw(opensusebasetest);
+use Utils::Backends;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use power_action_utils 'power_action';
 use lockapi;
 use mmapi;
+use Utils::Logging qw(save_and_upload_log save_and_upload_systemd_unit_log);
 
 our $master;
 our $slave;
@@ -21,24 +24,23 @@ our $slave;
 sub upload_ibtest_logs {
     my $self = shift;
 
-    $self->save_and_upload_log('dmesg', '/tmp/dmesg.log', {screenshot => 0});
-    $self->save_and_upload_log('systemctl list-units -l', '/tmp/systemd_units.log', {screenshot => 0});
+    save_and_upload_log('dmesg', '/tmp/dmesg.log', {screenshot => 0});
+    save_and_upload_log('systemctl list-units -l', '/tmp/systemd_units.log', {screenshot => 0});
 
-    $self->save_and_upload_systemd_unit_log('opensm.service');
-    $self->save_and_upload_systemd_unit_log('srp_daemon.service');
-    $self->save_and_upload_systemd_unit_log('nvmet.service');
-    $self->save_and_upload_systemd_unit_log('nvmf-autoconnect.service');
-    $self->save_and_upload_systemd_unit_log('rdma-hw.service');
-    $self->save_and_upload_systemd_unit_log('rdma-load-modules@infiniband.service');
-    $self->save_and_upload_systemd_unit_log('rdma-load-modules@rdma.service');
-    $self->save_and_upload_systemd_unit_log('rdma-load-modules@roce.service');
-    $self->save_and_upload_systemd_unit_log('rdma-ndd.service');
-    $self->save_and_upload_systemd_unit_log('rdma-sriov.service');
+    save_and_upload_systemd_unit_log('opensm.service');
+    save_and_upload_systemd_unit_log('srp_daemon.service');
+    save_and_upload_systemd_unit_log('nvmet.service');
+    save_and_upload_systemd_unit_log('nvmf-autoconnect.service');
+    save_and_upload_systemd_unit_log('rdma-hw.service');
+    save_and_upload_systemd_unit_log('rdma-load-modules@infiniband.service');
+    save_and_upload_systemd_unit_log('rdma-load-modules@rdma.service');
+    save_and_upload_systemd_unit_log('rdma-load-modules@roce.service');
+    save_and_upload_systemd_unit_log('rdma-ndd.service');
+    save_and_upload_systemd_unit_log('rdma-sriov.service');
 }
 
 sub ibtest_slave {
     my $self = shift;
-    zypper_call('in iputils python');
     barrier_wait('IBTEST_BEGIN');
     barrier_wait('IBTEST_DONE');
     $self->upload_ibtest_logs;
@@ -75,19 +77,14 @@ sub ibtest_master {
     $args = $args . "--mpi $mpi_flavours " if $mpi_flavours;
     $args = $args . "--ipoib $ipoib_modes " if $ipoib_modes;
 
-    # do all test preparations and setup
-    zypper_ar(get_required_var('DEVEL_TOOLS_REPO'), no_gpg_check => 1);
-    zypper_ar(get_required_var('SCIENCE_HPC_REPO'), no_gpg_check => 1, priority => 50) if get_var('SCIENCE_HPC_REPO', '');
-
-    zypper_call('in git-core twopence-shell-client bc iputils python', exitcode => [0, 65, 107]);
 
     # pull in the testsuite
-    assert_script_run("git clone $hpc_testing --branch $hpc_testing_branch");
+    assert_script_run("git clone $hpc_testing --branch $hpc_testing_branch", timeout => $timeout);
 
     # wait until the two machines under test are ready setting up their local things
     assert_script_run('cd hpc-testing');
     barrier_wait('IBTEST_BEGIN');
-    script_run("./ib-test.sh $args $master $slave", $timeout);
+    script_run("./ib-test.sh $args $master $slave", timeout => $timeout);
     script_run('tr -cd \'\11\12\15\40-\176\' < results/TEST-ib-test.xml > /tmp/results.xml');
     parse_extra_log('XUnit', '/tmp/results.xml');
 
@@ -106,22 +103,16 @@ sub run {
     $master = get_required_var('IBTEST_IP1');
     $slave = get_required_var('IBTEST_IP2');
 
-    $self->select_serial_terminal;
-
-    # unload firewall. MPI- and libfabric-tests require too many open ports
-    systemctl("stop " . opensusebasetest::firewall);
+    select_serial_terminal;
 
     # wait for both machines to boot up before we continue
     barrier_wait('IBTEST_SETUP');
 
-    # create a ssh key if we don't have one
-    script_run('[ ! -f /root/.ssh/id_rsa ] && ssh-keygen -b 2048 -t rsa -q -N "" -f /root/.ssh/id_rsa');
     # distribute the ssh key to the machines
     exec_and_insert_password("ssh-copy-id -o StrictHostKeyChecking=no root\@$master");
     script_run("/usr/bin/clear");
     exec_and_insert_password("ssh-copy-id -o StrictHostKeyChecking=no root\@$slave");
     script_run("/usr/bin/clear");
-
 
     if ($role eq 'IBTEST_MASTER') {
         $self->ibtest_master;

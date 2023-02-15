@@ -8,7 +8,7 @@
 # - Enter bootloader configuration option during install (unless is update)
 # - Set grub timeout to "-1" (60 if older than sle12sp1)
 # - Save screenshot
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use strict;
 use warnings;
@@ -16,6 +16,7 @@ use base 'y2_installbase';
 use testapi;
 use utils;
 use version_utils qw(is_sle is_leap is_upgrade);
+use Utils::Architectures;
 
 sub run {
     my ($self) = shift;
@@ -31,7 +32,7 @@ sub run {
     }
     else {
         # Select section booting on Installation Settings overview (video mode)
-        send_key_until_needlematch 'booting-section-selected', 'tab';
+        send_key_until_needlematch 'booting-section-selected', 'tab', 26, 1;
         send_key 'ret';
     }
 
@@ -53,7 +54,9 @@ sub run {
     # Depending on an optional button "release notes" we need to press "tab"
     # to go to the first tab
     send_key 'tab' unless match_has_tag 'inst-bootloader-settings-first_tab_highlighted';
-    send_key_until_needlematch 'inst-bootloader-options-highlighted', 'right';
+
+    my $bootloader_shortcut = (is_x86_64) ? 'alt-r' : 'alt-t';    # Seems now the bootloader shortcut is a different one
+    send_key_until_needlematch 'inst-bootloader-options-highlighted', is_sle('15-SP5+') ? $bootloader_shortcut : 'right';
     assert_screen 'installation-bootloader-options';
     # Select Timeout dropdown box and disable
     send_key 'alt-t';
@@ -64,6 +67,7 @@ sub run {
     $timeout = "90" if (get_var("REGRESSION", '') =~ /xen|kvm|qemu/);
     type_string $timeout;
 
+    wait_still_screen(1);
     # ncurses uses blocking modal dialog, so press return is needed
     send_key 'ret' if check_var('VIDEOMODE', 'text');
 

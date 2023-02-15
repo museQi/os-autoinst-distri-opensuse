@@ -9,9 +9,9 @@ conditional_schedule:
         - installation/bootloader_start
         - boot/boot_to_desktop
       'x86_64':
-        - microos/disk_boot
+        - '{{wizard}}'
       'aarch64':
-        - microos/disk_boot
+        - '{{wizard}}'
   registration:
     SCC_REGISTER:
       'installation':
@@ -36,7 +36,20 @@ conditional_schedule:
     FLAVOR:
       'ECS-Anywhere':
         - containers/ecs_anywhere
-
+  wizard:
+    FIRST_BOOT_CONFIG:
+      'wizard':
+        - jeos/firstrun
+      'ignition':
+        - microos/disk_boot
+      'combustion':
+        - microos/disk_boot
+      'combustion+ignition':
+        - microos/disk_boot
+  image_customization:
+    TEST_PROVISIONING:
+      '1':
+        - microos/verify_setup
 schedule:
   - '{{boot}}'
   - transactional/host_config
@@ -46,6 +59,7 @@ schedule:
   - '{{maintenance}}'
   - '{{selinux}}'
   - '{{k3s}}'
+  - '{{image_customization}}'
   - microos/networking
   - microos/libzypp_config
   - microos/image_checks

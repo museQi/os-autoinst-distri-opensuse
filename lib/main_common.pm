@@ -43,6 +43,7 @@ our @EXPORT = qw(
   is_desktop
   is_kernel_test
   is_ltp_test
+  is_systemd_test
   is_livesystem
   is_memtest
   is_memtest
@@ -101,6 +102,7 @@ our @EXPORT = qw(
   load_zdup_tests
   logcurrentenv
   map_incidents_to_repo
+  join_incidents_to_repo
   need_clear_repos
   noupdatestep_is_applicable
   opensuse_welcome_applicable
@@ -119,6 +121,7 @@ our @EXPORT = qw(
   load_extra_tests_kernel
   load_wicked_create_hdd
   load_jeos_openstack_tests
+  load_upstream_systemd_tests
 );
 
 sub init_main {
@@ -251,7 +254,8 @@ sub packagekit_available {
 
 sub is_ltp_test {
     return (get_var('INSTALL_LTP')
-          || get_var('LTP_COMMAND_FILE'));
+          || get_var('LTP_COMMAND_FILE')
+          || get_var('LIBC_LIVEPATCH'));
 }
 
 sub is_publiccloud_ltp_test {
@@ -270,6 +274,10 @@ sub is_kernel_test {
         || get_var('TRINITY')
         || get_var('NUMA_IRQBALANCE')
         || get_var('TUNED'));
+}
+
+sub is_systemd_test {
+    return get_var('SYSTEMD_TESTSUITE');
 }
 
 # Isolate the loading of LTP tests because they often rely on newer features
@@ -320,10 +328,10 @@ sub is_updates_test_repo {
 }
 
 sub is_repo_replacement_required {
-    return is_opensuse()    # Is valid scenario onlu for openSUSE
-      && !is_staging()    # Do not have mirrored repos on staging
+    return is_opensuse()    # Is valid scenario only for openSUSE
       && !get_var('KEEP_ONLINE_REPOS')    # Set variable no to replace variables
-      && get_var('SUSEMIRROR')    # Skip if required variable is not set (leap live tests)
+                                          # Skip if there isn't a repo to use (e.g. Leap live tests)
+      && (get_var('SUSEMIRROR') || (is_staging && get_var('ISO_1')))
       && !get_var('ZYPPER_ADD_REPOS')    # Skip if manual repos are specified
       && !get_var('OFFLINE_SUT')    # Do not run if SUT is offine
       && !get_var('ZDUP');    # Do not run on ZDUP as these tests handle repos on their own
@@ -498,7 +506,8 @@ sub load_autoyast_tests {
     return loadtest "locale/keymap_or_locale" if get_var('INSTALL_KEYBOARD_LAYOUT');
     loadtest("autoyast/console");
     loadtest("autoyast/login");
-    loadtest("autoyast/wicked");
+    # Wicked is the default on Leap and SLE < 16 only
+    loadtest("autoyast/wicked") if (is_sle("<16") || is_leap("<16.0"));
     loadtest('autoyast/' . get_var("AUTOYAST_VERIFY_MODULE")) if get_var("AUTOYAST_VERIFY_MODULE");
     if (get_var("SUPPORT_SERVER_GENERATOR")) {
         loadtest("support_server/configure");
@@ -588,7 +597,7 @@ sub load_jeos_openstack_tests {
     } else {
         loadtest 'publiccloud/ssh_interactive_start', run_args => $args;
     }
-    loadtest "jeos/image_info";
+    #    loadtest "jeos/image_info";
     loadtest "jeos/record_machine_id";
     loadtest "console/system_prepare" if is_sle;
     loadtest "console/force_scheduled_tasks";
@@ -615,12 +624,12 @@ sub load_jeos_tests {
     }
     load_boot_tests();
     loadtest "jeos/firstrun";
-    loadtest "jeos/image_info";
+    #    loadtest "jeos/image_info";
     loadtest "jeos/record_machine_id";
-    loadtest "console/system_prepare" if is_sle;
     loadtest "console/force_scheduled_tasks";
-    unless (get_var('INSTALL_LTP')) {
-        loadtest "jeos/grub2_gfxmode";
+    # this test case also disables grub timeout
+    loadtest "jeos/grub2_gfxmode";
+    unless (get_var('INSTALL_LTP') || get_var('SYSTEMD_TESTSUITE')) {
         loadtest "jeos/diskusage" unless is_openstack;
         loadtest "jeos/build_key";
         loadtest "console/prjconf_excluded_rpms";
@@ -656,7 +665,7 @@ sub snapper_is_applicable {
 }
 
 sub chromestep_is_applicable {
-    return is_opensuse && (is_i586 || is_x86_64);
+    return is_opensuse && is_x86_64;
 }
 
 sub chromiumstep_is_applicable {
@@ -788,6 +797,22 @@ sub map_incidents_to_repo {
     return $ret;
 }
 
+sub join_incidents_to_repo {
+    my ($incidents) = @_;
+    my @repos;
+
+    for my $k (keys %$incidents) {
+        next unless $incidents->{$k};
+        for my $i (split(/,/, $incidents->{$k})) {
+            if ($i) {
+                push @repos, $i;
+            }
+        }
+    }
+
+    return join(',', @repos);
+}
+
 our %valueranges = (
 
     #   LVM=>[0,1],
@@ -872,7 +897,6 @@ sub load_inst_tests {
         loadtest "installation/dud_addon";
     }
     loadtest "installation/welcome";
-    loadtest 'installation/accept_license' if has_license_to_accept;
     if (get_var('DUD_ADDONS') && is_sle('<15')) {
         loadtest "installation/dud_addon";
     }
@@ -880,8 +904,10 @@ sub load_inst_tests {
     if (get_var('IBFT')) {
         loadtest "installation/iscsi_configuration";
     }
+    # specific case for mru-install-multipath-remote
     if (get_var('WITHISCSI')) {
         loadtest "installation/disk_activation_iscsi";
+        loadtest "installation/multipath";
     }
     if (is_s390x) {
         if (is_backend_s390x) {
@@ -894,7 +920,7 @@ sub load_inst_tests {
     if (get_var('ENCRYPT_CANCEL_EXISTING') || get_var('ENCRYPT_ACTIVATE_EXISTING')) {
         loadtest "installation/encrypted_volume_activation";
     }
-    if (get_var('MULTIPATH') or get_var('MULTIPATH_CONFIRM')) {
+    if (!is_sle('15-SP4+') && !get_var('WITHISCSI') && (get_var('MULTIPATH') or get_var('MULTIPATH_CONFIRM'))) {
         loadtest "installation/multipath";
     }
     if (is_opensuse && noupdatestep_is_applicable() && !is_livecd) {
@@ -915,6 +941,9 @@ sub load_inst_tests {
     if (is_sle) {
         loadtest 'installation/network_configuration' if get_var('NETWORK_CONFIGURATION');
         loadtest "installation/scc_registration";
+        if (is_sle('15-SP4+') && !get_var('WITHISCSI') && (get_var('MULTIPATH') or get_var('MULTIPATH_CONFIRM'))) {
+            loadtest "installation/multipath";
+        }
         if (is_sles4sap and is_sle('<15') and !is_upgrade()) {
             loadtest "installation/sles4sap_product_installation_mode";
         }
@@ -1114,22 +1143,8 @@ sub load_console_server_tests {
         loadtest "console/shibboleth";
     }
     if (!is_staging && (is_opensuse || get_var('ADDONS', '') =~ /wsm/ || get_var('SCC_ADDONS', '') =~ /wsm/)) {
-        loadtest "console/php_pcre";
         # TODO test on SLE https://progress.opensuse.org/issues/31972
         loadtest "console/mariadb_odbc" if is_opensuse;
-        if (is_leap("<15.4") || is_sle("<15-SP4")) {
-            loadtest "console/php7";
-            loadtest "console/php7_mysql";
-            loadtest "console/php7_postgresql";
-            loadtest "console/php7_timezone";
-        }
-        else {
-            loadtest "console/php7" unless is_sle;
-            loadtest "console/php8";
-            loadtest "console/php8_mysql";
-            loadtest "console/php8_postgresql";
-            loadtest "console/php8_timezone";
-        }
     }
     # TODO test on openSUSE https://progress.opensuse.org/issues/31972
     loadtest "console/apache_ssl" if is_sle;
@@ -1217,7 +1232,7 @@ sub load_consoletests {
     }
     if (is_jeos) {
         loadtest "jeos/glibc_locale";
-        loadtest "jeos/kiwi_templates" unless (is_leap('<15.2'));
+        loadtest "jeos/kiwi_templates" unless (is_leap('<15.2') || is_staging);
     }
     loadtest 'console/systemd_wo_udev' if (is_sle('15-sp4+') || is_leap('15.4+') || is_tumbleweed);
     loadtest "console/ncurses" if is_leap;
@@ -1289,7 +1304,11 @@ sub load_consoletests {
         loadtest "feature/feature_console/deregister";
     }
     loadtest "console/nginx" if ((is_opensuse && !is_staging) || (is_sle('15+') && !is_desktop));
-    loadtest 'console/orphaned_packages_check' if is_jeos || get_var('UPGRADE') || get_var('ZDUP') || !is_sle('<12-SP4');
+    # Checking for orphaned packages only really makes sense with the full FTP tree
+    unless (is_staging) {
+        loadtest 'console/orphaned_packages_check' if is_jeos || get_var('UPGRADE') || get_var('ZDUP') || !is_sle('<12-SP4');
+    }
+    loadtest "console/zypper_log_packages" unless x11tests_is_applicable();
     loadtest "console/consoletest_finish";
 }
 
@@ -1311,6 +1330,7 @@ sub load_x11tests {
     }
     # first module after login or startup to check prerequisites
     loadtest "x11/desktop_runner";
+    loadtest "x11/setup";
     if (xfcestep_is_applicable()) {
         loadtest "x11/xfce4_terminal";
     }
@@ -1325,7 +1345,8 @@ sub load_x11tests {
         loadtest "x11/gnome_terminal";
         loadtest "x11/gedit";
     }
-    loadtest "x11/firefox";
+    # Need remove firefox tests in our migration tests from old Leap releases, keep them only in 15.2 and newer.
+    loadtest "x11/firefox" unless (is_leap && check_version('<15.2', get_var('ORIGINAL_VERSION'), qr/\d{2,}\.\d/) && is_upgrade());
     if (is_opensuse && !get_var("OFW") && is_qemu && !check_var('FLAVOR', 'Rescue-CD') && !is_kde_live) {
         loadtest "x11/firefox_audio";
     }
@@ -1440,6 +1461,7 @@ sub load_x11tests {
             loadtest "x11/reboot_lxde";
         }
     }
+    loadtest "console/zypper_log_packages";
     # Need to skip shutdown to keep backend alive if running rollback tests after migration
     unless (get_var('ROLLBACK_AFTER_MIGRATION')) {
         load_shutdown_tests;
@@ -1457,7 +1479,7 @@ sub load_extra_tests_y2uitest_ncurses {
         return;
     }
     # start extra yast console tests (self-contained only) from here
-    loadtest "console/yast2_rmt" unless (is_sle('<15-sp1') || is_leap('<15.0'));
+    loadtest "console/yast2_rmt" unless (is_sle('<15-sp1') || is_leap('<15.0') || is_i586);
     loadtest "console/yast2_ntpclient";
     loadtest "console/yast2_tftp";
     # We don't schedule some tests on s390x as they are unstable, see poo#42692
@@ -1644,8 +1666,6 @@ sub load_extra_tests_kdump {
 sub load_extra_tests_opensuse {
     return unless is_opensuse;
     loadtest "console/rabbitmq";
-    loadtest "console/rails";
-    loadtest "console/php_pcre";
     loadtest "console/openqa_review";
     loadtest "console/zbar";
     loadtest "console/a2ps";    # a2ps is not a ring package and thus not available in staging
@@ -1665,6 +1685,7 @@ sub load_extra_tests_geo_desktop {
 }
 
 sub load_extra_tests_console {
+    loadtest "console/ping";
     loadtest "console/check_os_release";
     loadtest "console/orphaned_packages_check";
     loadtest "console/cleanup_qam_testrepos" if has_test_issues;
@@ -1840,9 +1861,10 @@ sub load_extra_tests_filesystem {
     }
     loadtest 'console/snapper_used_space' if (is_sle('15-SP1+') || (is_opensuse && !is_leap('<15.1')));
     loadtest "console/udisks2" unless (is_sle('<=15-SP2') || get_var('VIRSH_VMM_FAMILY') =~ /xen/);
-    loadtest "console/zfs" if (is_leap(">=15.1") && is_x86_64 && !is_jeos);
     loadtest "network/cifs" if (is_sle('>=15-sp3') || is_opensuse);
     loadtest "network/samba/server" if (is_sle('>=15-sp3') || is_opensuse);
+    # Note: Until the snapshot restoration has been fixed (poo#109929), zfs should be the last test run
+    loadtest "console/zfs" if (is_leap(">=15.1") && is_x86_64 && !is_jeos);
 }
 
 sub get_wicked_tests {
@@ -2012,7 +2034,7 @@ sub load_x11_gnome {
 sub load_x11_other {
     if (check_var("DESKTOP", "gnome")) {
         loadtest "x11/brasero/brasero_launch";
-        loadtest "x11/gnomeapps/gnome_documents" if (is_sle('<16') || is_leap('<16.0'));
+        loadtest "x11/gnome_documents" if (is_sle('<16') || is_leap('<16.0'));
         loadtest "x11/totem/totem_launch";
         if (is_sle '15+') {
             loadtest "x11/xterm";
@@ -2020,6 +2042,7 @@ sub load_x11_other {
             loadtest "x11/gnome_control_center";
             loadtest "x11/gnome_tweak_tool";
             loadtest "x11/seahorse";
+            loadtest "x11/gnome_music";
         }
         loadtest 'x11/flatpak' if (is_opensuse);
     }
@@ -2062,6 +2085,7 @@ sub load_x11_webbrowser {
     loadtest "x11/firefox/firefox_extensions";
     loadtest "x11/firefox/firefox_appearance";
     loadtest "x11/firefox/firefox_passwd";
+    loadtest "x11/firefox/firefox_html5";
     loadtest "x11/firefox/firefox_developertool";
     loadtest "x11/firefox/firefox_ssl";
     loadtest "x11/firefox/firefox_emaillink";
@@ -2182,7 +2206,8 @@ sub load_applicationstests {
 
 sub load_security_console_prepare {
     loadtest "console/consoletest_setup";
-    loadtest "security/test_repo_setup" if (get_var("SECURITY_TEST") =~ /^crypt_/ && !is_opensuse);
+    # Add this setup only in product testing
+    loadtest "security/test_repo_setup" if (get_var("SECURITY_TEST") =~ /^crypt_/ && !is_opensuse && (get_var("BETA") || check_var("FLAVOR", "Online-QR")));
     loadtest "fips/fips_setup" if (get_var("FIPS_ENABLED"));
     loadtest "console/openssl_alpn" if (get_var("FIPS_ENABLED") && get_var("JEOS"));
     loadtest "console/yast2_vnc" if (get_var("FIPS_ENABLED") && is_pvm);
@@ -2257,6 +2282,15 @@ sub load_security_tests_crypt_firefox {
     loadtest "fips/mozilla_nss/firefox_nss" if get_var('FIPS_ENABLED');
 }
 
+sub load_security_tests_crypt_openjdk {
+    load_security_console_prepare;
+
+    if (get_var('FIPS_ENABLED')) {
+        loadtest "fips/openjdk/openjdk_fips";
+        loadtest "fips/openjdk/openjdk_ssh";
+    }
+}
+
 sub load_security_tests_crypt_tool {
     load_security_console_prepare;
 
@@ -2269,43 +2303,17 @@ sub load_security_tests_crypt_tool {
     loadtest "console/git";
     loadtest "console/clamav";
     loadtest "console/openvswitch_ssl";
+    loadtest "console/ntp_client";
+    loadtest "console/cups";
+    loadtest "console/syslog";
+    loadtest "x11/evolution/evolution_prepare_servers";
+    loadtest "console/mutt";
 }
 
 sub load_security_tests_crypt_libtool {
     load_security_console_prepare;
 
     loadtest "fips/libtool/liboauth";
-}
-
-sub load_security_tests_crypt_krb5kdc {
-
-    loadtest "console/consoletest_setup";
-    loadtest "fips/fips_setup" if (get_var("FIPS_ENABLED"));
-
-    loadtest "security/krb5/krb5_crypt_prepare";
-    loadtest "security/krb5/krb5_crypt_setup_kdc";
-}
-
-sub load_security_tests_crypt_krb5server {
-
-    loadtest "console/consoletest_setup";
-    loadtest "fips/fips_setup" if (get_var("FIPS_ENABLED"));
-
-    loadtest "security/krb5/krb5_crypt_prepare";
-    loadtest "security/krb5/krb5_crypt_setup_server";
-    loadtest "security/krb5/krb5_crypt_ssh_server";
-    loadtest "security/krb5/krb5_crypt_nfs_server";
-}
-
-sub load_security_tests_crypt_krb5client {
-
-    loadtest "console/consoletest_setup";
-    loadtest "fips/fips_setup" if (get_var("FIPS_ENABLED"));
-
-    loadtest "security/krb5/krb5_crypt_prepare";
-    loadtest "security/krb5/krb5_crypt_setup_client";
-    loadtest "security/krb5/krb5_crypt_ssh_client";
-    loadtest "security/krb5/krb5_crypt_nfs_client";
 }
 
 sub load_security_tests_fips_setup {
@@ -2367,8 +2375,8 @@ sub load_security_tests_yast2_apparmor {
 
     loadtest "security/yast2_apparmor/settings_disable_enable_apparmor";
     loadtest "security/yast2_apparmor/settings_toggle_profile_mode";
-    loadtest "security/yast2_apparmor/scan_audit_logs";
-    loadtest "security/yast2_apparmor/manually_add_profile";
+    loadtest "security/yast2_apparmor/scan_audit_logs_ncurses";
+    loadtest "security/yast2_apparmor/manually_add_profile_ncurses";
 }
 
 sub load_security_tests_yast2_users {
@@ -2406,34 +2414,14 @@ sub load_security_tests_openscap {
     loadtest "security/openscap/oscap_validating";
 }
 
-sub load_security_tests_selinux {
-    # ALWAYS run following tests in sequence because of the dependencies
-    # Setup - install SELinux necessary packages
-    loadtest "security/selinux/selinux_setup";
-    loadtest "security/selinux/sestatus";
-    loadtest "security/selinux/selinux_smoke";
-
-    # Change SELinux from "permissive" mode to "enforcing" mode for testing
-    loadtest "security/selinux/enforcing_mode_setup";
-    # The following test modules must be run after "enforcing_mode_setup"
-    loadtest "security/selinux/semanage_fcontext";
-    loadtest "security/selinux/semanage_boolean";
-    loadtest "security/selinux/fixfiles";
-    loadtest "security/selinux/print_se_context";
-    loadtest "security/selinux/audit2allow";
-    loadtest "security/selinux/semodule";
-    loadtest "security/selinux/setsebool";
-    loadtest "security/selinux/restorecon";
-    loadtest "security/selinux/chcon";
-    loadtest "security/selinux/chcat";
-    loadtest "security/selinux/set_get_enforce";
-    loadtest "security/selinux/selinuxexeccon";
-}
-
 sub load_security_tests_cc_audit_test {
     # Setup environment for cc testing: 'audit-test' test suite setup
     # Such as: download code branch; install needed packages
     loadtest 'security/cc/cc_audit_test_setup';
+
+    # For s390x, we enable root ssh when installing system, so we need to
+    # disable root ssh login, because this is a requirement for cc testing.
+    loadtest 'security/cc/disable_root_ssh' if (is_s390x);
 
     # Run test cases of 'audit-test' test suite which do NOT need SELinux env
     loadtest 'security/cc/audit_tools';
@@ -2443,11 +2431,21 @@ sub load_security_tests_cc_audit_test {
     loadtest 'security/cc/extended_apparmor_interface_trace_test';
     loadtest 'security/cc/apparmor_negative_test';
 
+    # For s390x, we should enable root ssh before rebooting, otherwise, the automation test
+    # will fail on can't login the system.
+    if (is_s390x) {
+        my $root_ssh_switch = OpenQA::Test::RunArgs->new();
+        $root_ssh_switch->{option} = 'yes';
+        loadtest('security/cc/disable_root_ssh', name => 'enable_root_ssh', run_args => $root_ssh_switch);
+    }
     # Some audit tests must be run in selinux enabled mode. so load selinux setup here
     # Setup environment for cc testing: SELinux setup
     # Such as: set up SELinux with permissive mode and specific policy type
     loadtest 'security/selinux/selinux_setup';
     loadtest 'security/cc/cc_selinux_setup';
+
+    # When system reboot, we need to disable root ssh for following tests
+    loadtest 'security/cc/disable_root_ssh' if (is_s390x);
 
     # Run test cases of 'audit-test' test suite which do need SELinux env
     # Please add these test cases here: poo#93441
@@ -2466,35 +2464,6 @@ sub load_security_tests_cc_audit_remote_libvirt {
 
 sub load_security_tests_mok_enroll {
     loadtest "security/mokutil_sign";
-}
-
-sub load_security_tests_ima_measurement {
-    loadtest "security/ima/ima_setup";
-    loadtest "security/ima/ima_measurement";
-    loadtest "security/ima/ima_kernel_cmdline_template";
-    loadtest "security/ima/ima_kernel_cmdline_hash";
-    loadtest "security/ima/ima_measurement_audit";
-}
-
-sub load_security_tests_ima_appraisal {
-    loadtest "security/ima/ima_setup";
-    loadtest "security/ima/ima_appraisal_hashes";
-    loadtest "security/ima/ima_appraisal_digital_signatures";
-    loadtest "security/ima/ima_verify";
-    loadtest "security/ima/ima_appraisal_audit";
-    loadtest "security/ima/evmctl_ima_sign";
-}
-
-sub load_security_tests_evm_protection {
-    loadtest "security/ima/ima_setup";
-    loadtest "security/ima/evm_setup";
-    loadtest "security/ima/evm_protection_hmacs";
-    loadtest "security/ima/evm_protection_digital_signatures";
-    loadtest "security/ima/evm_verify";
-}
-
-sub load_security_tests_system_check {
-    loadtest "security/nproc_limits";
 }
 
 sub load_security_tests_check_kernel_config {
@@ -2643,13 +2612,12 @@ sub load_mitigation_tests {
 
 sub load_security_tests {
     my @security_tests = qw(
-      fips_setup crypt_core crypt_web crypt_kernel crypt_x11 crypt_firefox crypt_tool
-      crypt_libtool crypt_krb5kdc crypt_krb5server crypt_krb5client
+      fips_setup crypt_core crypt_web crypt_kernel crypt_x11 crypt_firefox crypt_tool crypt_openjdk
+      crypt_libtool
       ipsec mmtest
-      apparmor apparmor_profile yast2_apparmor yast2_users selinux
+      apparmor apparmor_profile yast2_apparmor yast2_users
       openscap
-      mok_enroll ima_measurement ima_appraisal evm_protection
-      system_check
+      mok_enroll
       check_kernel_config
       tpm2
       pam
@@ -2678,12 +2646,19 @@ sub load_security_tests {
 sub load_system_prepare_tests {
     loadtest 'console/system_prepare' unless is_opensuse;
     loadtest 'ses/install_ses' if check_var_array('ADDONS', 'ses') || check_var_array('SCC_ADDONS', 'ses');
-    loadtest 'qa_automation/patch_and_reboot' if (is_updates_tests and !get_var("USER_SPACE_TESTSUITES"));
+    if (is_updates_tests and !get_var("USER_SPACE_TESTSUITES")) {
+        if (is_transactional) {
+            loadtest 'transactional/install_updates';
+        } else {
+            loadtest 'qa_automation/patch_and_reboot';
+        }
+    }
     loadtest 'console/integration_services' if is_hyperv || is_vmware;
     loadtest 'console/hostname' unless is_bridged_networking;
     loadtest 'console/install_rt_kernel' if check_var('SLE_PRODUCT', 'SLERT');
     loadtest 'console/force_scheduled_tasks' unless is_jeos;
     loadtest 'console/check_selinux_fails' if get_var('SELINUX');
+    loadtest 'security/cc/ensure_crypto_checks_enabled' if check_var('SYSTEM_ROLE', 'Common_Criteria');
     # Remove repos pointing to download.opensuse.org and add snaphot repo from o3
     replace_opensuse_repos_tests if is_repo_replacement_required;
     loadtest 'console/scc_deregistration' if get_var('SCC_DEREGISTER');
@@ -2860,7 +2835,7 @@ sub load_extra_tests_syscontainer {
 sub load_extra_tests_kernel {
     loadtest "kernel/module_build";
     loadtest "kernel/tuned";
-    loadtest "kernel/fwupd";
+    loadtest "kernel/fwupd" if is_sle('15+');
 }
 
 # Scheduling set for validation of specific installation
@@ -2890,8 +2865,6 @@ sub load_installation_validation_tests {
 
 sub load_transactional_role_tests {
     replace_opensuse_repos_tests if is_repo_replacement_required;
-    # ^ runs only outside of stagings, clear repos otherwise
-    loadtest "update/zypper_clear_repos" if is_staging;
     loadtest 'transactional/filesystem_ro';
     loadtest 'transactional/transactional_update';
     loadtest 'transactional/rebootmgr';
@@ -2904,7 +2877,7 @@ sub load_common_opensuse_sle_tests {
     load_create_hdd_tests if (get_var("STORE_HDD_1") || get_var("PUBLISH_HDD_1")) && !get_var('PUBLIC_CLOUD');
     loadtest 'console/network_hostname' if get_var('NETWORK_CONFIGURATION');
     load_installation_validation_tests if get_var('INSTALLATION_VALIDATION');
-    load_transactional_role_tests if is_transactional && (get_var('ARCH') !~ /ppc64|s390/);
+    load_transactional_role_tests if is_transactional && (get_var('ARCH') !~ /ppc64|s390/) && !get_var('INSTALLONLY');
 }
 
 sub load_ssh_key_import_tests {
@@ -3124,7 +3097,7 @@ sub updates_is_applicable {
     return 0 if get_var('INSTALLONLY') || get_var('BOOT_TO_SNAPSHOT') || get_var('DUALBOOT');
     # After upgrading using only the DVD, packages not on the DVD can be
     # updated in the installed system with online repos.
-    return 0 if get_var('UPGRADE') && !check_var('FLAVOR', 'DVD');
+    return 0 if get_var('UPGRADE') && !(check_var('FLAVOR', 'DVD') || check_var('FLAVOR', 'DVD-Updates'));
 
     return 1;
 }
@@ -3246,6 +3219,10 @@ sub load_nfs_tests {
     loadtest "nfs/install";
     loadtest "nfs/run";
     loadtest "nfs/generate_report";
+}
+
+sub load_upstream_systemd_tests {
+    loadtest 'systemd_testsuite/prepare_systemd_and_testsuite';
 }
 
 1;

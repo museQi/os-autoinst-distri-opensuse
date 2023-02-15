@@ -73,6 +73,11 @@ sub prepare_for_kdump_sle {
         my $url = "http://dist.suse.de/ibs/SUSE/Updates/SLE-SERVER/12-SP2-LTSS-ERICSSON/$arch/update_debug/";
         zypper_call("--no-gpg-checks ar -f -G $url '12-SP2-LTSS-ERICSSON-Debuginfo-Updates'");
     }
+    if (is_sle('=12-SP3')) {
+        my $arch = get_var('ARCH');
+        my $url = "http://dist.suse.de/ibs/SUSE/Updates/SLE-SERVER/12-SP3-LTSS-TERADATA/$arch/update_debug/";
+        zypper_call("--no-gpg-checks ar -f -G $url '12-SP3-LTSS-TERADATA-Debuginfo-Updates'");
+    }
 
     script_run(q(zypper mr -e $(zypper lr | awk '/Debug/ {print $1}')), 60);
     install_kernel_debuginfo;
@@ -170,7 +175,8 @@ sub activate_kdump {
         $expect_restart_info = 1;
     }
     # ppcl64e and aarch64 needs increased kdump memory bsc#1161421
-    if (is_ppc64le || is_aarch64) {
+    # migration regression test cases need increase kdump memory since lot of services start
+    if (is_ppc64le || is_aarch64 || get_var('FLAVOR') =~ /Regression/) {
         if ($increase_kdump_memory) {
             send_key('alt-y');
             type_string $memory_kdump;
@@ -186,19 +192,31 @@ sub activate_kdump {
         $expect_restart_info = 1;
     }
     send_key('alt-o');
+    # Expect yast2-kdump-restart-info on s390x
+    $expect_restart_info = 1 if (is_s390x && is_sle('15-SP5+'));
     if ($expect_restart_info == 1) {
-        my @tags = qw(yast2-kdump-restart-info os-prober-warning);
+        my @tags = qw(yast2-kdump-restart-info os-prober-warning yast2-kdump-no-restart-info);
         do {
             assert_screen(\@tags, timeout => 180);
             handle_warning_install_os_prober() if match_has_tag('os-prober-warning');
-        } until (match_has_tag('yast2-kdump-restart-info'));
+        } until (match_has_tag('yast2-kdump-restart-info') || match_has_tag('yast2-kdump-no-restart-info'));
+        send_key('alt-o') if match_has_tag('yast2-kdump-restart-info');
+    }
+
+    if (check_screen('yast2-kdump-restart-info', 180)) {
+        record_info('bsc#1202629', 'yast2 kdump shows "To apply changes a reboot is necessary" even no changes there');
         send_key('alt-o');
     }
+
     wait_serial("$module_name-0", 240) || die "'yast2 kdump' didn't finish";
 }
 
 # Activate kdump using yast command line interface
 sub activate_kdump_cli {
+    # Skip configuration, if is kdump already enabled and no special memory settings is required
+    my $status = script_run('yast kdump show 2>&1 | grep "Kdump is disabled"', 180);
+    return if ($status and !get_var('CRASH_MEMORY'));
+
     # Make sure fadump is disabled on PowerVM
     assert_script_run('yast2 kdump fadump disable', 180) if is_pvm;
 
@@ -213,13 +231,15 @@ sub activate_kdump_cli {
     record_info('CRASH MEMORY', $crash_memory);
     assert_script_run("yast kdump startup enable alloc_mem=${crash_memory}", 180);
     # Enable firmware assisted dump if needed
-    assert_script_run('yast2 kdump fadump enable', 180) if check_var('FADUMP');
+    assert_script_run('yast2 kdump fadump enable', 180) if get_var('FADUMP');
     assert_script_run('yast kdump show', 180);
     systemctl('enable kdump');
 }
 
 # Deactivate kdump using yast command line interface
 sub deactivate_kdump_cli {
+    # Solution to poo113351. Avoid to use needles to solve this case.
+    zypper_call("--gpg-auto-import-keys ref");
     # Disable the crashkernel option from the kernel grub cmdline
     assert_script_run('yast kdump startup disable alloc_mem=0', 180);
     # Disable the kdump service at boot time
@@ -327,6 +347,7 @@ sub configure_service {
 sub check_function {
     my %args = @_;
     $args{test_type} //= '';
+    my $boot_timeout = is_aarch64 || is_hyperv ? 240 : undef;
 
     my $self = y2_module_consoletest->new();
 
@@ -346,18 +367,18 @@ sub check_function {
         reconnect_mgmt_console if is_pvm;
     }
     else {
-        power_action('reboot', observe => 1, keepconsole => 1);
+        power_action('reboot', textmode => 1, observe => 1, keepconsole => 1);
     }
     unlock_if_encrypted;
-    # Wait for system's reboot; more time for Hyper-V as it's slow.
-    $self->wait_boot(bootloader_time => check_var('VIRSH_VMM_FAMILY', 'hyperv') ? 200 : undef);
+    # Wait for system's reboot; more time for Hyper-V / aarch64 as it's slow.
+    $self->wait_boot(bootloader_time => $boot_timeout);
     select_console 'root-console';
 
     assert_script_run 'find /var/crash/';
 
     if ($args{test_type} eq 'function') {
         # Check, that vmcore exists, otherwise fail
-        assert_script_run('ls -lah /var/crash/*/vmcore', 180);
+        assert_script_run('ls -lah /var/crash/*/vmcore', 240);
         my $vmlinux = (is_sle("<16") || is_leap("<16.0")) ? '/boot/vmlinux-$(uname -r)*' : '/usr/lib/modules/$(uname -r)/vmlinux*';
         my $crash_cmd = "echo exit | crash `ls -1t /var/crash/*/vmcore | head -n1` $vmlinux";
         validate_script_output "$crash_cmd", sub { m/PANIC:\s([^\s]+)/ }, 800;
@@ -415,7 +436,7 @@ sub full_kdump_check {
     select_console 'root-console';
 
     if ($stage eq 'before') {
-        configure_service(test_type => $stage);
+        configure_service(test_type => $stage, yast_interface => 'cli');
     }
     check_function();
 

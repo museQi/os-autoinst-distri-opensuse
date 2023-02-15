@@ -14,12 +14,14 @@ use base "opensusebasetest";
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call clear_console);
 use version_utils qw(is_sle);
 use rt_utils qw(select_kernel);
 use File::Basename qw(fileparse);
 use power_action_utils qw(power_action);
 use Utils::Systemd qw(systemctl);
+use Utils::Logging 'save_and_upload_log';
 
 sub run_lttng_demo_trace {
     my $trace = {
@@ -52,7 +54,7 @@ sub run_lttng_demo_trace {
 
 sub run {
     my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Stop packagekit
     systemctl 'mask packagekit.service';
@@ -62,20 +64,14 @@ sub run {
     script_run 'sed -i s\'/^allow_unsupported_modules 0/allow_unsupported_modules 1/\' /etc/modprobe.d/10-unsupported-modules.conf';
 
     # install kmp packages
-    # Add build repo for slert15sp2+
-    if (script_run('zypper lr SLE_RT_IBS_REPO') && is_sle('>15-SP1')) {
-        my $version = get_var('VERSION');
-        zypper_call "ar -f -p 101 http://download.suse.de/ibs/SUSE:/SLE-$version:/Update:/Products:/SLERT/standard SLE_RT_IBS_REPO";
-    }
     zypper_call 'ref';
     zypper_call 'in lttng-tools *-kmp-rt', 500;
 
     # Reboot in order to select RT kernel
-    if (script_run q|egrep 'BOOT_IMAGE=/boot/vmlinuz-.*-[[:digit:]]-rt' /proc/cmdline|) {
+    if (script_run q|grep -E 'BOOT_IMAGE=/boot/vmlinuz-.*-[[:digit:]]-rt' /proc/cmdline|) {
         power_action('reboot', textmode => 1);
         select_kernel('rt');
-        assert_screen 'generic-desktop';
-        $self->select_serial_terminal;
+        select_serial_terminal;
     }
 
     # switched to RT kernel
@@ -105,9 +101,9 @@ sub post_fail_hook {
 
     select_console 'log-console';
 
-    $self->save_and_upload_log("dmesg", "dmesg.log", {screenshot => 1});
-    $self->save_and_upload_log("journalctl --no-pager -o short-precise", "journalctl.log", {screenshot => 1});
-    $self->save_and_upload_log('rpm -qa *-kmp-rt', "list_of_kmp_rpms", {screenshot => 1});
+    save_and_upload_log("dmesg", "dmesg.log", {screenshot => 1});
+    save_and_upload_log("journalctl --no-pager -o short-precise", "journalctl.log", {screenshot => 1});
+    save_and_upload_log('rpm -qa *-kmp-rt', "list_of_kmp_rpms", {screenshot => 1});
     if ((script_run 'test -e /var/log/modprobe.out') == 0) {
         upload_logs '/var/log/modprobe.out';
     }

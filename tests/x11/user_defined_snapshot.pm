@@ -64,15 +64,21 @@ sub run {
     wait_serial("$module_name-0", 200) || die "'yast2 $module_name' didn't finish";
     $self->{in_wait_boot} = 1;
     record_info 'Snapshot created', 'booting the system into created snapshot';
-    power_action('reboot', keepconsole => 1);
-    $self->wait_grub(bootloader_time => 250);
-    send_key_until_needlematch("boot-menu-snapshot", 'down', 10, 5);
+    if (check_var('VIRSH_VMM_FAMILY', 'xen')) {
+        record_info('workaround for poo#123999');
+        power_action('reboot', textmode => 1, keepconsole => 1);
+    }
+    else {
+        power_action('reboot', keepconsole => 1);
+    }
+    $self->wait_grub(bootloader_time => 350);
+    send_key_until_needlematch("boot-menu-snapshot", 'down', 11, 5);
     send_key 'ret';
     $self->{in_wait_boot} = 0;
     # On slow VMs we press down key before snapshots list is on screen
     wait_screen_change { assert_screen 'boot-menu-snapshots-list' };
 
-    send_key_until_needlematch("snap-bootloader-comment", 'down', 10, 5);
+    send_key_until_needlematch("snap-bootloader-comment", 'down', 11, 5);
     save_screenshot;
     wait_screen_change { send_key 'ret' };
 
@@ -85,7 +91,7 @@ sub run {
     # request reboot again to ensure we will end up in the original system
     record_info 'Desktop reached', 'Now return system to original state with a reboot';
     power_action('reboot', keepconsole => 1);
-    $self->wait_boot(textmode => $is_textmode, in_grub => 1, bootloader_time => 250);
+    $self->wait_boot(textmode => $is_textmode, in_grub => 1, bootloader_time => 350);
 }
 
 1;

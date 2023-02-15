@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2021 SUSE LLC
+# Copyright 2020-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Basic functions for testing docker
@@ -79,6 +79,44 @@ sub registry_url {
     return sprintf("%s/%s:%s", $repo, $container_name, $version_tag);
 }
 
+sub test_update_cmd {
+    my %args = @_;
+    my $runtime = $args{runtime};
+    my $container = $args{container};
+
+    # podman update was added to v4.3.0
+    if ($runtime eq 'podman') {
+        my $version = script_output "podman version | awk '/^Version:/ { print \$2 }'";
+        if (package_version_cmp($version, '4.3.0') <= 0) {
+            record_info("SKIP", "The update command is not supported on podman $version");
+            return;
+        }
+    } elsif ($runtime ne 'docker') {
+        record_info("SKIP", "The update command is not supported on $runtime");
+        return;
+    }
+
+    my $old_value = script_output "$runtime container inspect -f '{{.HostConfig.CpuShares}}' $container";
+    die "Default for cpu-shares != 0" if ($old_value != 0);
+
+    my $try_value = 512;
+
+    assert_script_run "$runtime update --cpu-shares $try_value $container";
+
+    my $new_value = script_output "$runtime container inspect -f '{{.HostConfig.CpuShares}}' $container";
+
+    if ($try_value != $new_value) {
+        if ($runtime eq 'podman') {
+            # NOTE: Remove block when https://github.com/containers/podman/issues/17187 is solved
+            my $id = script_output "podman container inspect -f '{{.Id}}' $container";
+            my $cpu_weight = "cat /sys/fs/cgroup/machine.slice/libpod-$id.scope/cpu.weight";
+            die "$runtime update failed for cpu-shares: $cpu_weight" if $cpu_weight == 100;
+        } else {
+            die "$runtime update failed for cpu-shares: $try_value != $new_value";
+        }
+    }
+}
+
 # This is simple and universal
 sub runtime_smoke_tests {
     my %args = @_;
@@ -110,6 +148,9 @@ sub runtime_smoke_tests {
         # Exec command in running container
         assert_script_run("$runtime exec sleeper echo 'Hello'");
 
+        # Test update command
+        test_update_cmd(runtime => $runtime, container => 'sleeper');
+
         # Stop the container
         assert_script_run("$runtime stop sleeper");
 
@@ -132,7 +173,9 @@ sub basic_container_tests {
     my $tumbleweed = "registry.opensuse.org/opensuse/tumbleweed";
 
     # Test search feature
-    validate_script_output("$runtime search --no-trunc --format \"table {{.Name}} {{.Description}}\" tumbleweed", sub { m/Official openSUSE Tumbleweed images/ });
+    validate_script_output("$runtime search --no-trunc --format \"table {{.Name}} {{.Description}}\" tumbleweed", sub { m/Official openSUSE Tumbleweed images/ }, timeout => 200);
+    # This should be conditional based on the needed time, but that's currently not possible.
+    record_info('Softfail', 'Searching registry.suse.com is too slow (https://sd.suse.com/servicedesk/customer/portal/1/SD-106252)');
 
     #   - pull minimalistic alpine image of declared version using tag
     #   - https://store.docker.com/images/alpine
@@ -187,7 +230,7 @@ sub basic_container_tests {
     assert_script_run("$runtime container commit $container_name tw:saved", 240);
 
     # Network is working inside of the containers
-    my $output = script_output("$runtime container run tw:saved curl -I google.de");
+    my $output = script_output("$runtime container run tw:saved curl -sI google.de");
     die("network is not working inside of the container tw:saved") unless ($output =~ m{Location: http://www\.google\.de/});
 
     # Using an init process as PID 1
@@ -217,8 +260,8 @@ sub basic_container_tests {
     die("error: $runtime image rmi -a $leap") if ($output_containers =~ m/Untagged:.*opensuse\/leap/);
     die("error: $runtime image rmi -a $tumbleweed") if ($output_containers =~ m/Untagged:.*opensuse\/tumbleweed/);
     die("error: $runtime image rmi -a tw:saved") if ($output_containers =~ m/Untagged:.*tw:saved/);
-    record_soft_failure("error: $runtime image rmi -a $alpine") if ($output_containers =~ m/Untagged:.*alpine/);
-    record_soft_failure("error: $runtime image rmi -a $hello_world:latest") if ($output_containers =~ m/Untagged:.*hello-world:latest/);
+    record_info('Softfail', "error: $runtime image rmi -a $alpine", result => 'softfail') if ($output_containers =~ m/Untagged:.*alpine/);
+    record_info('Softfail', "error: $runtime image rmi -a $hello_world:latest", result => 'softfail') if ($output_containers =~ m/Untagged:.*hello-world:latest/);
 }
 
 =head2 can_build_sle_base
@@ -230,6 +273,7 @@ In this case the build of the base image is not going to work as it lacks the re
 The call should return false if the test is run on a non-sle host.
 
 =cut
+
 sub can_build_sle_base {
     # script_run returns 0 if true, but true is 1 on perl
     my $has_sle_registration = !script_run("test -e /etc/zypp/credentials.d/SCCcredentials");

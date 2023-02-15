@@ -20,11 +20,11 @@ use base 'y2_module_basetest';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 
 sub run {
-    my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     zypper_call("in yast2-users yast2-nis-client ypbind", exitcode => [0, 102, 103, 106]);
 
     # adds a new user with a password and homedir and verifies
@@ -41,7 +41,8 @@ sub run {
 
     # binds a nis server and start ypbind service, and then list all users from NIS server
     assert_script_run("yast nis enable domain=suse.de server=wotan.suse.de");
-    validate_script_output("ypwhich 2>&1", sub { m/(wotan|dns2).suse.de/ });
+    my $nis_server = get_var('NAMESERVER');
+    validate_script_output("ypwhich 2>&1", sub { m/((wotan|dns2).suse.de|$nis_server)/ });
     validate_script_output("yast users list nis 2>&1 | wc -l", sub { m/^(\d+)$/m and $1 > 20 }, timeout => 180, proceed_on_failure => 1);
     assert_script_run("yast nis disable");
 }

@@ -10,7 +10,6 @@ use base "virt_feature_test_base";
 use strict;
 use warnings;
 use testapi;
-use set_config_as_glue;
 use utils;
 use virt_utils;
 use virt_autotest::common;
@@ -22,6 +21,15 @@ sub run_test {
     return unless is_kvm_host;
 
     foreach my $guest (keys %virt_autotest::common::guests) {
+        if (virt_autotest::utils::is_sev_es_guest($guest) ne 'notsev') {
+            record_info "Skip internal snapshot on $guest", "SEV/SEV-ES guest $guest does not support internal snapshot";
+            next;
+        }
+        if (script_output("virsh dumpxml $guest | xmlstarlet sel -t -v ///loader/\@type", proceed_on_failure => 1) eq 'pflash') {
+            record_info("Skip internal snapshot on $guest", "VM with pflash based firmware are not supported to make internal snapshots.");
+            next;
+        }
+
         my $type = check_guest_disk_type($guest);
         next if ($type == 1);
         record_info "virsh-snapshot", "Cleaning in case of rerun";

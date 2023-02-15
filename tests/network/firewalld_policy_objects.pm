@@ -33,6 +33,7 @@ use base "consoletest";
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use lockapi;
 use mmapi 'wait_for_children';
 use mm_network;
@@ -70,6 +71,7 @@ sub configure_machines {
         configure_static_dns(get_host_resolv_conf(), is_nm => $is_nm);
         restart_networking(is_nm => $is_nm);
         assert_script_run("ip route add 10.0.3.0/24 via $FW_EXT_IP");
+        assert_script_run("ip route add 10.0.2.2 dev $net0");
         assert_script_run("ip route show");
     } elsif ($hostname eq "client") {
         record_info 'Setting up Client machine';
@@ -77,6 +79,7 @@ sub configure_machines {
         configure_static_dns(get_host_resolv_conf(), is_nm => $is_nm);
         restart_networking(is_nm => $is_nm);
         assert_script_run("ip route add default via $FW_INT_IP");
+        assert_script_run("ip route add 10.0.2.2 dev $net0");
         assert_script_run("ip route show");
     }
 }
@@ -182,7 +185,7 @@ sub run {
     }
     mutex_wait 'barrier_setup_done';
 
-    $self->select_serial_terminal;
+    select_serial_terminal;
     barrier_wait 'BARRIER_READY';
 
     configure_machines($self, $hostname, $net0, $net1);

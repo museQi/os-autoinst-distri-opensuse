@@ -46,15 +46,18 @@ sub run {
     send_key 'tab';
     type_string "admin";
     send_key 'tab';
+    send_key 'tab';
     send_key 'ret';
     assert_screen "new-password", $timeout;
     type_password;
     send_key 'tab';
+    send_key 'tab';
     type_password;
     send_key 'tab';
+    send_key 'tab';
     send_key 'ret';
-    assert_and_click "grafana-home", $timeout;
-    assert_and_click "select_suse-dashboard", $timeout;
+    assert_and_click "grafana-home", timeout => $timeout;
+    assert_and_click "select_suse-dashboard", timeout => $timeout;
     assert_screen "check_suse-dashboard", $timeout;
 
     # Close the browser and back to the desktop

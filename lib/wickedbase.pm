@@ -14,6 +14,7 @@ use Encode qw(encode_utf8);
 use network_utils;
 use lockapi;
 use testapi qw(is_serial_terminal :DEFAULT);
+use serial_terminal 'select_serial_terminal';
 use bmwqemu;
 use serial_terminal;
 use Carp;
@@ -40,6 +41,7 @@ The mandatory parameter C<iface> specifies the interface which action will be ex
 This function saves the command and the stdout and stderr to a file to be uploaded later.
 
 =cut
+
 sub wicked_command {
     my ($self, $action, $iface) = @_;
     my $serial_log = '/tmp/wicked_serial.log';
@@ -59,6 +61,7 @@ sub wicked_command {
 
 Return the current installed wicked version
 =cut
+
 sub get_wicked_version {
     my $v = script_output(q(rpm -qa 'wicked' --qf '%{VERSION}\n'));
     die("Unable to get wicked version '$v'") unless $v =~ /^\d+\.\d+\.\d+$/;
@@ -70,6 +73,7 @@ sub get_wicked_version {
     check_wicked_version('>=0.6.66')
 
 =cut
+
 sub check_wicked_version {
     my ($self, $query) = @_;
     return 1 if get_var('WICKED_SKIP_VERSION_CHECK', 0);
@@ -104,6 +108,7 @@ The optinal argument C<iface> allows to print the output of the command 'ip addr
 With no arguments, it will check that wicked.service and wickedd.service are up.
 
 =cut
+
 sub assert_wicked_state {
     my ($self, %args) = @_;
     systemctl('is-active wicked.service', expect_false => $args{wicked_client_down});
@@ -216,6 +221,7 @@ Gets the IP of a given interface by C<ifc>.
 The parameter C<ip_version> chould be one of the values 'v4' or 'v6'.
 
 =cut
+
 sub get_current_ip {
     my ($self, $ifc, %args) = @_;
     $args{ip_version} //= 'v4';
@@ -233,6 +239,7 @@ sub get_current_ip {
 Download all files from data/wicked into WICKED_DATA_DIR.
 This method is used by before_test.pm.
 =cut
+
 sub download_data_dir {
     assert_script_run("mkdir -p '" . WICKED_DATA_DIR . "'");
     assert_script_run("(cd '" . WICKED_DATA_DIR . "'; curl -L -v " . autoinst_url . "/data/wicked > wicked.data && cpio -id < wicked.data && mv data wicked && rm wicked.data)");
@@ -248,6 +255,7 @@ If the parameter C<add_suffix> is set to 1, it will append 'ref' or 'sut' at the
 If the parameter C<executable> is set to 1, it will grant execution permissions to the file.
 
 =cut
+
 sub get_from_data {
     my ($self, $source, $target, %args) = @_;
 
@@ -267,6 +275,7 @@ IP could be specified directly via C<ip> or using C<type> variable. In case of C
 it will be bypassed to C<get_remote_ip> function to get IP by label.
 If ping fails, command die unless you specify C<proceed_on_failure>.
 =cut
+
 sub ping_with_timeout {
     my ($self, %args) = @_;
     $args{ip_version} //= 'v4';
@@ -316,6 +325,7 @@ The mandatory parameter C<type> determines if it will configure a TUN device or 
 The interface will be brought up using a wicked command.
 
 =cut
+
 sub setup_tuntap {
     my ($self, $config, $type, $iface) = @_;
     my $local_ip = $self->get_ip(type => $type);
@@ -334,6 +344,7 @@ will be replaced with the corresponding IPs. The mandatory parameter C<type> sho
 The interface will be brought up using a wicked command.
 
 =cut
+
 sub setup_tunnel {
     my ($self, $config, $type, $iface) = @_;
     my $local_ip = $self->get_ip(type => 'host');
@@ -352,6 +363,7 @@ The parameter C<type> determines the interface to be configured and C<mode> the 
 Supported tunnels in this function are GRE, SIT, IPIP, TUN.
 
 =cut
+
 sub create_tunnel_with_commands {
     my ($self, $type, $mode, $sub_mask) = @_;
     my $local_ip = $self->get_ip(type => 'host');
@@ -393,6 +405,7 @@ dummy interface using the config file given by this parameter.
 C<command> determines the wicked command to bring up/down the interface
 
 =cut
+
 sub setup_bridge {
     my ($self, $config, $dummy, $command) = @_;
     my $local_ip = $self->get_ip(type => 'host');
@@ -414,6 +427,7 @@ sub setup_bridge {
 Setups the openvpn client using the interface given by C<device>
 
 =cut
+
 sub setup_openvpn_client {
     my ($self, $device) = @_;
     my $openvpn_client = '/etc/openvpn/client.conf';
@@ -430,6 +444,7 @@ It returns FAILED or PASSED if the ping to the remote IP of a certain interface 
 The parameter C<ip_version> chould be one of the values 'v4' or 'v6'.
 
 =cut
+
 sub get_test_result {
     my ($self, $type, $ip_version) = @_;
     my $timeout = "60";
@@ -451,6 +466,7 @@ not throw and error. On failing we only put a C<<record_info(result => fail)>>
 
     $self->upload_log_file($src [, $dst]);
 =cut
+
 sub upload_log_file {
     my ($self, $src, $dst) = @_;
     $dst //= basename($src);
@@ -461,7 +477,7 @@ sub upload_log_file {
         upload_file($src, $dst);
     };
     record_info('Failed to upload file', $@, result => 'fail') if ($@);
-    $self->select_serial_terminal;
+    select_serial_terminal;
 }
 
 sub add_post_log_file {
@@ -481,6 +497,7 @@ This function is normally called before and after a test is executed, the parame
 to the file name to be uploaded. Normally 'pre' or 'post', but could be any string.
 
 =cut
+
 sub upload_wicked_logs {
     my ($self, $prefix) = @_;
     my $dir_name = $self->{name} . '_' . $prefix;
@@ -514,6 +531,7 @@ sub upload_wicked_logs {
 Used to syncronize the wicked tests for SUT and REF creating the corresponding mutex locks.
 
 =cut
+
 sub do_barrier {
     my ($self, $type) = @_;
     my $barrier_name = 'test_' . $self->{name} . '_' . $type;
@@ -528,6 +546,7 @@ Creating VLAN using only ip commands. Getting ip alias name for wickedbase::get_
 function
 
 =cut
+
 sub setup_vlan {
     my ($self, $ip_type) = @_;
     my $iface = iface();
@@ -653,6 +672,7 @@ After succesfully service start will create mutex with C<$mutex>
 which can be used by parallel test to catch this event
 
 =cut
+
 sub sync_start_of {
     my ($self, $service, $mutex, $tries) = @_;
     $tries //= 12;
@@ -776,6 +796,7 @@ it try to lookup a member function with the given c<name> and replace the string
 with return value
 
 =cut
+
 sub write_cfg {
     my ($self, $filename, $content, %args) = @_;
     my ($filename_orig, $content_orig);
@@ -814,9 +835,11 @@ END_OF_CONTENT_$rand
 
 sub run_test_shell_script
 {
-    my ($self, $title, $script_cmd) = @_;
+    my ($self, $title, $script_cmd, %args) = @_;
+    $args{timeout} //= 300;
+
     $self->check_logs(sub {
-            my $output = script_output($script_cmd . '; echo "==COLLECT_EXIT_CODE==$?=="', proceed_on_failure => 1, timeout => 300);
+            my $output = script_output($script_cmd . '; echo "==COLLECT_EXIT_CODE==$?=="', proceed_on_failure => 1, timeout => $args{timeout});
             my $result = $output =~ m/==COLLECT_EXIT_CODE==0==/ ? 'ok' : 'fail';
             $self->record_console_test_result($title, $output, result => $result);
     });
@@ -838,17 +861,22 @@ sub skip_check_logs_on_post_run {
     shift->{skip_check_logs_on_post_run} = 1;
 }
 
+sub get_log_cursor {
+    my $cursor = script_output(q(journalctl -o export -n 1 | tr -dc '\n|[[:print:]]' |  grep __CURSOR));
+    ($cursor) = ($cursor =~ /^__CURSOR=(.*)$/m);
+    return $cursor;
+}
+
 sub check_logs {
     my $self = shift;
     my $code = shift;
-    my $cursor = '';
+    my $cursor = $self->{pre_run_log_cursor} // '';
 
     if (ref($code) eq 'CODE') {
-        $cursor = script_output(q(journalctl -o export -n 1 | tr -dc '\n|[[:print:]]' |  grep __CURSOR));
-        ($cursor) = ($cursor =~ /^__CURSOR=(.*)$/m);
-        $cursor = "-c '$cursor'";
+        $cursor = $self->get_log_cursor();
         $code->();
     }
+    $cursor = "-c '$cursor'" if (length($cursor) > 0);
     my @units = qw(wickedd-nanny wickedd-dhcp4 wickedd-dhcp6 wicked wickedd);
     my $default_exclude = 'wickedd=process \d+ has not exited yet; now doing a blocking waitpid';
     $default_exclude .= ',wickedd-dhcp6=Link-local IPv6 address is marked duplicate:';
@@ -960,14 +988,14 @@ sub post_run {
 
 sub pre_run_hook {
     my ($self) = @_;
-    $self->select_serial_terminal();
+    select_serial_terminal();
     my $coninfo = '## START: ' . $self->{name};
     wait_serial(serial_term_prompt(), undef, 0, no_regex => 1);
     type_string($coninfo);
     wait_serial($coninfo, undef, 0, no_regex => 1);
     send_key 'ret';
     if ($self->{name} eq 'before_test' && get_var('VIRTIO_CONSOLE_NUM', 1) > 1) {
-        my $serial_terminal = is_ppc64le ? 'hvc2' : 'hvc1';
+        my $serial_terminal = is_ppc64le ? 'hvc3' : 'hvc2';
         add_serial_console($serial_terminal);
     }
     if ($self->{name} ne 'before_test' && get_var('WICKED_TCPDUMP')) {
@@ -975,6 +1003,7 @@ sub pre_run_hook {
         set_var('WICKED_TCPDUMP_PID', script_output('echo $CHECK_TCPDUMP_PID'));
     }
     $self->upload_wicked_logs('pre');
+    $self->{pre_run_log_cursor} = $self->get_log_cursor() if ($self->{name} ne 'before_test');
     $self->SUPER::pre_run_hook;
     $self->do_barrier('pre_run');
 }

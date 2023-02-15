@@ -16,6 +16,7 @@ use strict;
 use warnings;
 use base "consoletest";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(is_sle);
 use Utils::Architectures;
@@ -27,8 +28,7 @@ sub cleanup {
 }
 
 sub run {
-    my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     zypper_call('in mariadb');
     my $mariadb = (is_sle '<15-SP4') ? 'mysql' : 'mariadb';
@@ -54,7 +54,7 @@ sub run {
         systemctl 'start mariadb@node2.service';
 
         # Test a regression for broken multi instance
-        assert_script_run '/usr/bin/my_print_defaults mysqld mysqld_multi "node1" --defaults-extra-file=/etc/mynode1.cnf | grep datadir';
+        assert_script_run '/usr/bin/my_print_defaults --defaults-extra-file=/etc/mynode1.cnf mysqld mysqld_multi "node1" | grep datadir';
 
         # Stop the two instances
         cleanup();

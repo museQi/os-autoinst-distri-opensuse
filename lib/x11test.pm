@@ -16,14 +16,25 @@ use Config::Tiny;
 use Utils::Architectures;
 use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed);
-use x11utils qw(select_user_gnome handle_gnome_activities);
+use x11utils qw(select_user_gnome start_root_shell_in_xterm handle_gnome_activities);
 use POSIX 'strftime';
 use mm_network;
+use Utils::Logging qw(export_healthcheck_basic select_log_console export_logs_basic export_logs_desktop);
 
 sub post_run_hook {
     my ($self) = @_;
 
     assert_screen('generic-desktop') unless match_has_tag('generic-desktop');
+}
+
+sub post_fail_hook {
+    return if (get_var('NOLOGS'));
+    select_log_console;
+    export_healthcheck_basic;
+    show_tasks_in_blocked_state;
+    export_logs_basic;
+    # Export extra log after failure for further check gdm issue 1127317, also poo#45236 used for tracking action on Openqa
+    export_logs_desktop;
 }
 
 sub dm_login {
@@ -251,12 +262,12 @@ sub check_new_mail_evolution {
     send_key "alt-w";
     send_key "ret";
     wait_still_screen 2;
-    send_key_until_needlematch "evolution_mail_show-all", "down", 5, 1;
+    send_key_until_needlematch "evolution_mail_show-all", "down", 6, 1;
     send_key "ret";
     wait_still_screen(2);
     send_key "alt-n";
     send_key "ret";
-    send_key_until_needlematch "evolution_mail_show-allcount", "down", 5, 1;
+    send_key_until_needlematch "evolution_mail_show-allcount", "down", 6, 1;
     send_key "ret";
     send_key "alt-c";
     type_string "$mail_search";
@@ -432,7 +443,7 @@ sub setup_mail_account {
     # Open Server Type screen.
     send_key "alt-t";
     wait_still_screen(1);
-    send_key_until_needlematch "evolution_wizard-receiving-$proto", "down", 10, 1;
+    send_key_until_needlematch "evolution_wizard-receiving-$proto", "down", 11, 1;
     send_key "alt-s";
     wait_still_screen(1);
     type_string "$mail_recvServer";
@@ -452,7 +463,7 @@ sub setup_mail_account {
     type_string "$mail_user";
     send_key "alt-m";
     wait_still_screen(1);
-    send_key_until_needlematch "evolution_wizard-receiving-ssl", "down", 5, 1;
+    send_key_until_needlematch "evolution_wizard-receiving-ssl", "down", 6, 1;
     $self->evolution_add_self_signed_ca($account);
     assert_screen [qw(evolution_wizard-receiving-opts evolution_wizard-receiving-not-focused)];
     if (match_has_tag 'evolution_wizard-receiving-not-focused') {
@@ -474,7 +485,7 @@ sub setup_mail_account {
     wait_still_screen(2);
     send_key "home";
     wait_still_screen(2);
-    send_key_until_needlematch "evolution_wizard-sending-smtp", "down", 5, 1;
+    send_key_until_needlematch "evolution_wizard-sending-smtp", "down", 6, 1;
     send_key "alt-s";
     type_string "$mail_sendServer";
     wait_still_screen(2, 2);
@@ -488,7 +499,7 @@ sub setup_mail_account {
     send_key "home";
     #change to use mail-server and SSL
     my $encrypt = get_var('QAM_MAIL_EVOLUTION') ? 'TLS' : 'STARTTLS';
-    send_key_until_needlematch "evolution_SSL_wizard-sending-$encrypt", "down", 5, 1;
+    send_key_until_needlematch "evolution_SSL_wizard-sending-$encrypt", "down", 6, 1;
     assert_and_click "evolution_wizard-sending-setauthtype";
     assert_and_click "evolution_wizard-sending-setauthtype_login";
     wait_screen_change { send_key 'alt-n' };
@@ -513,7 +524,37 @@ sub setup_mail_account {
         send_key "ret";
     }
     # Μake sure the welcome window is maximized
-    send_key_until_needlematch 'evolution_mail-max-window', 'super-up', 3, 3;
+    send_key_until_needlematch 'evolution_mail-max-window', 'super-up', 4, 3;
+}
+
+# Use AutoConfig file for firefox to predefine some user values
+# https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
+sub prepare_firefox_autoconfig {
+    my ($self) = @_;
+    start_root_shell_in_xterm;
+
+    # Enable AutoConfig by pointing to a cfg file
+    type_string(
+        q{cat <<EOF > $(rpm --eval %_libdir)/firefox/defaults/pref/autoconfig.js
+pref("general.config.filename", "firefox.cfg");
+pref("general.config.obscure_value", 0);
+EOF
+});
+    # Create AutoConfig cfg file
+    type_string(
+        q{cat <<EOF > $(rpm --eval %_libdir)/firefox/firefox.cfg
+// Mandatory comment
+// https://firefox-source-docs.mozilla.org/browser/components/newtab/content-src/asrouter/docs/first-run.html
+pref("app.normandy.enabled", false);
+pref("browser.aboutwelcome.enabled", false);
+pref("browser.startup.upgradeDialog.enabled", false);
+pref("privacy.restrict3rdpartystorage.rollout.enabledByDefault", false);
+EOF
+});
+
+    save_screenshot;
+    # Close the xterm with root shell
+    enter_cmd "killall xterm";
 }
 
 # start clean firefox with one suse.com tab, visit pages which trigger pop-up so they will not pop again
@@ -677,26 +718,25 @@ sub firefox_open_url {
         }
     }
     enter_cmd_slow "$url";
-    wait_still_screen 2, 4;
-    send_key_until_needlematch 'firefox-url-loaded', 'f5', 3, 90;
+    assert_screen 'firefox-url-loaded', 180;
 }
 
 sub firefox_preferences {
-    send_key_until_needlematch 'firefox-edit-menu', 'alt-e', 5, 5;
-    send_key_until_needlematch 'firefox-preferences', 'n', 5, 5;
+    send_key_until_needlematch 'firefox-edit-menu', 'alt-e', 6, 5;
+    send_key_until_needlematch 'firefox-preferences', 'n', 6, 5;
 }
 
 sub exit_firefox_common {
     # Exit
     send_key 'ctrl-q';
-    wait_still_screen 1, 2;
-    send_key_until_needlematch([qw(firefox-save-and-quit xterm-left-open xterm-without-focus)], "alt-f4", 3, 30);
+    wait_still_screen 3, 6;
+    send_key_until_needlematch([qw(firefox-save-and-quit xterm-left-open xterm-without-focus)], "alt-f4", 7, 30);
     if (match_has_tag 'firefox-save-and-quit') {
         # confirm "save&quit"
         send_key "ret";
     }
     # wait a sec because xterm-without-focus can match while firefox is being closed
-    wait_still_screen 2;
+    wait_still_screen 3, 6;
     assert_screen [qw(xterm-left-open xterm-without-focus)];
     if (match_has_tag 'xterm-without-focus') {
         # focus it
@@ -775,7 +815,7 @@ sub setup_evolution_for_ews {
     assert_screen "test-evolution-1";
     send_key "alt-o";
     assert_screen "evolution_wizard-restore-backup";
-    send_key_until_needlematch("evolution_wizard-identity", "alt-o", 10);
+    send_key_until_needlematch("evolution_wizard-identity", "alt-o", 11);
     wait_screen_change {
         send_key "alt-e";
     };
@@ -797,7 +837,7 @@ sub setup_evolution_for_ews {
     send_key "alt-t";
     wait_still_screen(1);
     send_key "ret";
-    send_key_until_needlematch "evolution_wizard-receiving-ews", "up", 10, 3;
+    send_key_until_needlematch "evolution_wizard-receiving-ews", "up", 11, 3;
     send_key "ret";
     assert_screen "evolution_wizard-ews-prefill";
     send_key "alt-u";
@@ -900,7 +940,7 @@ sub tomboy_logout_and_login {
 
 sub gnote_launch {
     x11_start_program('gnote');
-    send_key_until_needlematch 'gnote-start-here-matched', 'down', 5;
+    send_key_until_needlematch 'gnote-start-here-matched', 'down', 6;
 }
 
 sub gnote_search_and_close {
@@ -968,6 +1008,10 @@ sub check_desktop_runner {
     x11_start_program('true', target_match => 'generic-desktop', no_wait => 1);
 }
 
+sub disable_key_repeat {
+    x11_start_program('xset -r', target_match => 'generic-desktop', no_wait => 1);
+}
+
 # Start one of the libreoffice components, close any first-run dialogs
 sub libreoffice_start_program {
     my ($self, $program) = @_;
@@ -1008,7 +1052,8 @@ sub add_input_resource {
 
     if (is_sle('<=15-sp3') || is_leap('<=15.3')) {
         x11_start_program "gnome-control-center region", target_match => "g-c-c-region-language";
-    } else {
+    }
+    else {
         x11_start_program "gnome-control-center keyboard", target_match => "g-c-c-keyboard";
     }
 
@@ -1019,9 +1064,11 @@ sub add_input_resource {
     assert_and_click "ibus-input-$tag";
     if ($tag eq "japanese") {
         assert_and_dclick 'ibus-input-japanese-kkc';
-    } elsif ($tag eq "chinese") {
+    }
+    elsif ($tag eq "chinese") {
         assert_and_dclick 'ibus-input-chinese-pinyin';
-    } elsif ($tag eq "korean") {
+    }
+    elsif ($tag eq "korean") {
         assert_and_dclick 'ibus-input-korean-hangul';
     }
     assert_screen "ibus-input-added-$tag";
@@ -1029,4 +1076,70 @@ sub add_input_resource {
     assert_screen 'generic-desktop';
 }
 
+sub firefox_print2file_overview {
+    my ($self, $file) = @_;
+
+    # Prepare files for firefox printing
+    x11_start_program('gnome-terminal');
+    if (script_run("test -d ffprint")) {
+        assert_script_run "mkdir ffprint";
+    }
+    script_run "cd ffprint";
+    assert_script_run("wget " . autoinst_url . "/data/x11/firefox/$file");
+
+    if ($file eq "horizframetest") {
+        assert_script_run("wget " . autoinst_url . "/data/x11/firefox/horizframetest_files.tar.xz");
+        assert_script_run("tar xvf horizframetest_files.tar.xz");
+    }
+    elsif ($file eq "vertframetest") {
+        assert_script_run("wget " . autoinst_url . "/data/x11/firefox/vertframetest_files.tar.xz");
+        assert_script_run("tar xvf vertframetest_files.tar.xz");
+    }
+    elsif ($file eq "list") {
+        assert_script_run("wget " . autoinst_url . "/data/x11/firefox/list_files.tar.xz");
+        assert_script_run("tar xvf list_files.tar.xz");
+    }
+    send_key "alt-f4";
+    $self->start_firefox_with_profile;
+    $self->firefox_open_url("/home/$username/ffprint/$file");
+    assert_screen("firefox-print-$file-display");
+    send_key "ctrl-p";
+    assert_and_click("firefox-print-$file-overview");
+}
+
+sub firefox_print {
+    my ($self, $file) = @_;
+
+    # Click the "Save" button on the print overview page
+    assert_and_click("firefox-print2pdf-save");
+
+    # Specify the path and name of output file
+    send_key "ctrl-a";
+    type_string("/home/$username/ffprint/$file-output.pdf");
+
+    # Click save button on the save to destination page
+    assert_and_click("firefox-print-output-save");
+
+    wait_still_screen 5;
+
+    # Close firefox
+    send_key "alt-f4";
+}
+
+sub verify_firefox_print_output {
+    my ($self, $file) = @_;
+
+    # Verify the content and format of output file
+    x11_start_program("evince /home/$username/ffprint/$file-output.pdf", target_match => "evince-$file-output-default");
+    wait_still_screen 2;
+    send_key "alt-f10";    # maximize window
+    assert_screen("evince-$file-output-pdf", 5);
+    send_key "ctrl-w";    # close evince
+}
+
+sub cleanup_firefox_print {
+    assert_script_run "rm -rf /home/$username/ffprint/*";
+    send_key 'ctrl-d';
+    assert_screen 'generic-desktop';
+}
 1;

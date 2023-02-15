@@ -65,7 +65,6 @@ conditional_schedule:
                 - console/wpa_supplicant
                 - appgeo/gdal
                 - console/rabbitmq
-                - console/rails
                 - console/openqa_review
                 - console/zbar
                 - console/a2ps
@@ -77,6 +76,7 @@ conditional_schedule:
                 - console/python_scientific
                 - console/vmstat
                 - console/kdump_and_crash
+                - console/ansible
     validate_packages_and_patterns:
         DISTRI:
             sle:
@@ -88,7 +88,6 @@ conditional_schedule:
                 - console/zziplib
                 - console/vsftpd
                 - console/python310_version_check
-                - network/samba/samba_adcli
     tumbleweed_tests:
         VERSION:
             'Tumbleweed':
@@ -103,6 +102,7 @@ schedule:
     - console/prepare_test_data
     - console/consoletest_setup
     - '{{update_repos}}'
+    - console/ping
     - console/orphaned_packages_check
     - console/zypper_lr_validate
     - console/zypper_ref
@@ -151,7 +151,6 @@ schedule:
     - console/mutt
     - '{{sle_tests}}'
     - console/mdadm
-    - console/journalctl
     - console/systemd_nspawn
     - console/quota
     - console/vhostmd
@@ -167,5 +166,9 @@ schedule:
     - console/osinfo_db
     - '{{opensuse_tests}}'
     - '{{tumbleweed_tests}}'
+    - console/journalctl
     - console/tar
     - console/coredump_collect
+    - console/valgrind
+    - console/sssd_389ds_functional
+    - console/zypper_log_packages

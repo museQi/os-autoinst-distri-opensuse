@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Summary: Process online repos during installation, relevant for openSUSE only
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'y2_installbase';
 use strict;
@@ -25,14 +25,14 @@ sub disable_online_repos_explicitly {
     # Disable repos
     if (is_leap) {
         # We have update non-oss repo on leap
-        send_key_until_needlematch 'main-update-nos-oss-repo-disabled', 'spc', 3, 1;
+        send_key_until_needlematch 'main-update-nos-oss-repo-disabled', 'spc', 4, 1;
         send_key 'down';
     }
-    send_key_until_needlematch 'main-update-repo-disabled', 'spc', 3, 1;
+    send_key_until_needlematch 'main-update-repo-disabled', 'spc', 4, 1;
     send_key 'down';
-    send_key_until_needlematch 'main-repo-oss-disabled', 'spc', 3, 1;
+    send_key_until_needlematch 'main-repo-oss-disabled', 'spc', 4, 1;
     send_key 'down';
-    send_key_until_needlematch 'main-repo-non-oss-disabled', 'spc', 3, 1;
+    send_key_until_needlematch 'main-repo-non-oss-disabled', 'spc', 4, 1;
     assert_screen 'online-repos-disabled';
     send_key $cmd{next};
 }

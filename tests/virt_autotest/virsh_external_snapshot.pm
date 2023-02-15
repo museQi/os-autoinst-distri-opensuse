@@ -11,7 +11,6 @@ use base "virt_feature_test_base";
 use strict;
 use warnings;
 use testapi;
-use set_config_as_glue;
 use utils;
 use virt_utils;
 use virt_autotest::common;
@@ -22,7 +21,6 @@ sub run_test {
     #Snapshots are supported on KVM VM Host Servers only
     return unless is_kvm_host;
 
-    my $vm_types = "sles|win";
     my $wait_script = "30";
     my $vm_hostnames = script_output("virsh list --all --name", $wait_script, type_command => 0, proceed_on_failure => 0);
     my @vm_hostnames_array = split(/\n+/, $vm_hostnames);
@@ -38,6 +36,10 @@ sub run_test {
     my @vm_hostnames_inactive_array = split(/\n+/, $vm_hostnames_inactive);
 
     foreach my $guest (keys %virt_autotest::common::guests) {
+        if (virt_autotest::utils::is_sev_es_guest($guest) ne 'notsev') {
+            record_info "Skip external snapshot on $guest", "SEV/SEV-ES guest $guest does not support external snapshot";
+            next;
+        }
         my $type = check_guest_disk_type($guest);
         next if ($type == 1);
         record_info "virsh-snapshot", "Creating External Snapshot of guest's disk";

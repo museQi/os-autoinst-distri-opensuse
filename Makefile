@@ -1,4 +1,4 @@
-PERL5LIB_:=../..:os-autoinst:lib:tests/installation:tests/x11:tests/qa_automation:tests/virt_autotest:tests/cpu_bugs:$$PERL5LIB
+PERL5LIB_:=../..:os-autoinst:lib:tests/installation:tests/x11:tests/qa_automation:tests/virt_autotest:tests/cpu_bugs:tests/sles4sap/saptune:$$PERL5LIB
 
 .PHONY: all
 all:
@@ -10,6 +10,7 @@ help:
 .PHONY: prepare
 prepare:
 	git clone https://github.com/os-autoinst/os-autoinst.git
+	./tools/wheel --fetch
 	$(MAKE) check-links
 	cd os-autoinst && cpanm -nq --installdeps .
 	cpanm -nq --installdeps .
@@ -33,7 +34,7 @@ check-links: tools/tidy tools/lib/ os-autoinst/
 
 .PHONY: check-links
 tidy-check: check-links
-	tools/tidy --check
+	tools/tidy --check --quiet
 
 .PHONY: tidy
 tidy: tools/tidy
@@ -50,11 +51,15 @@ unit-test:
 
 .PHONY: test-compile
 test-compile: check-links
-	export PERL5LIB=${PERL5LIB_} ; ( git ls-files "*.pm" || find . -name \*.pm|grep -v /os-autoinst/ ) | parallel perl -c 2>&1 | grep -v " OK$$" && exit 2; true
+	export PERL5LIB=${PERL5LIB_}:$(shell ./tools/wheel --verify) ; ( git ls-files "*.pm" || find . -name \*.pm|grep -v /os-autoinst/ ) | parallel perl -c 2>&1 | grep -v " OK$$" && exit 2; true
 
 .PHONY: test-compile-changed
 test-compile-changed: os-autoinst/
-	export PERL5LIB=${PERL5LIB_} ; for f in `git diff --name-only | grep '.pm'` ; do perl -c $$f 2>&1 | grep -v " OK$$" && exit 2; done ; true
+	export PERL5LIB=${PERL5LIB_}:$(shell ./tools/wheel --verify) ; for f in `git diff --name-only | grep '.pm'` ; do perl -c $$f 2>&1 | grep -v " OK$$" && exit 2; done ; true
+
+.PHONY: test_pod_whitespace_rule
+test_pod_whitespace_rule:
+	tools/check_pod_whitespace_rule
 
 .PHONY: test-yaml-valid
 test-yaml-valid:
@@ -107,7 +112,7 @@ test-spec:
 	tools/update_spec --check
 
 .PHONY: test-static
-test-static: tidy-check test-yaml-valid test-modules-in-yaml-schedule test-merge test-dry test-no-wait_idle test-deleted-renamed-referenced-files test-unused-modules-changed test-soft_failure-no-reference test-spec test-invalid-syntax test-code-style test-metadata
+test-static: tidy-check test-yaml-valid test-modules-in-yaml-schedule test-merge test-dry test-no-wait_idle test-deleted-renamed-referenced-files test-unused-modules-changed test-soft_failure-no-reference test-spec test-invalid-syntax test-code-style test-metadata test_pod_whitespace_rule
 
 .PHONY: test
 ifeq ($(TESTS),compile)
@@ -122,7 +127,8 @@ else
 test: unit-test test-static test-compile test-isotovideo perlcritic
 endif
 
-PERLCRITIC=PERL5LIB=tools/lib/perlcritic:$$PERL5LIB perlcritic --quiet --stern --include "strict" --include Perl::Critic::Policy::HashKeyQuote
+PERLCRITIC=PERL5LIB=tools/lib/perlcritic:$$PERL5LIB perlcritic --stern --include "strict" --include Perl::Critic::Policy::HashKeyQuote \
+  --verbose "::warning file=%f,line=%l,col=%c,title=%m - severity %s::%e\n"
 
 .PHONY: perlcritic
 perlcritic: tools/lib/
@@ -147,7 +153,7 @@ test-deleted-renamed-referenced-files:
 
 .PHONY: test-soft_failure-no-reference
 test-soft_failure-no-reference:
-	@! git --no-pager grep -E -e 'soft_failure\>.*\;' --and --not -e '([$$0-9a-z]+#[$$0-9a-zA-Z]+|fate.suse.com/[0-9]|\$$[a-z]+)' lib/ tests/
+	@! git --no-pager grep -E -e 'record_soft_failure\>.*\;' --and --not -e '([a-zA-Z]+#[a-zA-Z-]*[0-9]+|fate.suse.com/[0-9]+|\$reference)' lib/ tests/
 
 .PHONY: test-invalid-syntax
 test-invalid-syntax:

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2022 SUSE LLC
+# Copyright 2022 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -13,6 +13,7 @@
 use Mojo::Base 'publiccloud::basetest';
 use registration;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils 'systemctl';
 use version_utils 'is_sle';
 use transactional qw(process_reboot trup_call);
@@ -22,7 +23,7 @@ use version_utils 'get_os_release';
 
 sub run {
     my ($self, $args) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     my ($running_version, $sp, $host_distri) = get_os_release;
     install_docker_when_needed($host_distri);

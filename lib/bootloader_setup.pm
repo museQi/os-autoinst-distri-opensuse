@@ -15,7 +15,7 @@ use Time::HiRes 'sleep';
 use testapi;
 use Utils::Architectures;
 use utils;
-use version_utils qw(is_microos is_sle_micro is_jeos is_leap is_sle is_tumbleweed is_selfinstall);
+use version_utils qw(is_microos is_sle_micro is_jeos is_leap is_sle is_tumbleweed is_selfinstall is_alp is_transactional);
 use mm_network;
 use Utils::Backends;
 
@@ -44,6 +44,7 @@ our @EXPORT = qw(
   select_bootmenu_language
   tianocore_enter_menu
   tianocore_select_bootloader
+  tianocore_set_svga_resolution
   tianocore_http_boot
   zkvm_add_disk
   zkvm_add_interface
@@ -55,6 +56,7 @@ our @EXPORT = qw(
   GRUB_CFG_FILE
   GRUB_DEFAULT_FILE
   add_grub_cmdline_settings
+  add_grub_xen_replace_cmdline_settings
   change_grub_config
   get_cmdline_var
   grep_grub_cmdline_settings
@@ -66,6 +68,7 @@ our @EXPORT = qw(
   tianocore_disable_secureboot
   prepare_disks
   get_scsi_id
+  sync_time
 );
 
 our $zkvm_img_path = "/var/lib/libvirt/images";
@@ -103,6 +106,7 @@ grub entries with C<GRUB_PARAM='ima_policy=tcb'> and calling add_custom_grub_ent
 And of course the new entries have C<ima_policy=tcb> added to kernel parameters.
 
 =cut
+
 sub add_custom_grub_entries {
     my @grub_params = split(/\s*;\s*/, trim(get_var('GRUB_PARAM', '')));
     return unless $#grub_params >= 0;
@@ -122,6 +126,12 @@ sub add_custom_grub_entries {
     elsif (is_sle()) {
         $distro = "SLES" . ' \\?' . get_required_var('VERSION');
     }
+    elsif (is_alp()) {
+        $distro = "Adaptable Linux Platform";
+    }
+    elsif (is_sle_micro()) {
+        $distro = "SLE Micro" . ' \\?' . get_required_var('VERSION');
+    }
 
     bmwqemu::diag("Trying to trigger purging old kernels before changing grub menu");
     script_run('/sbin/purge-kernels');
@@ -131,6 +141,8 @@ sub add_custom_grub_entries {
 
     my $section_old = "sed -e '1,/$script_old_esc/d' -e '/$script_old_esc/,\$d' $cfg_old";
     my $cnt_old = script_output("$section_old | grep -c 'menuentry .$distro'");
+
+    my $run_cmd = is_transactional ? 'transactional-update -c -d --quiet run' : '';
 
     my $i = 10;
     foreach my $grub_param (@grub_params) {
@@ -149,11 +161,11 @@ sub add_custom_grub_entries {
         upload_logs(GRUB_CFG_FILE, failok => 1);
 
         my $section_new = "sed -e '1,/$script_new_esc/d' -e '/$script_new_esc/,\$d' " . GRUB_CFG_FILE;
-        my $cnt_new = script_output("$section_new | grep -c 'menuentry .$distro'");
+        my $cnt_new = script_output("$run_cmd $section_new | grep -c 'menuentry .$distro'");
         die("Unexpected number of grub entries: $cnt_new, expected: $cnt_old") if ($cnt_old != $cnt_new);
-        $cnt_new = script_output("grep -c 'menuentry .$distro.*($grub_param)' " . GRUB_CFG_FILE);
+        $cnt_new = script_output("$run_cmd grep -c 'menuentry .$distro.*($grub_param)' " . GRUB_CFG_FILE);
         die("Unexpected number of new grub entries: $cnt_new, expected: " . ($cnt_old)) if ($cnt_old != $cnt_new);
-        $cnt_new = script_output("grep -c -E 'linux.*(/boot|/vmlinu[xz]-).* $grub_param ' " . GRUB_CFG_FILE);
+        $cnt_new = script_output("$run_cmd grep -c -E 'linux.*(/boot|/vmlinu[xz]-).* $grub_param ' " . GRUB_CFG_FILE);
         die("Unexpected number of new grub entries with '$grub_param': $cnt_new, expected: " . ($cnt_old)) if ($cnt_old != $cnt_new);
     }
 }
@@ -206,6 +218,7 @@ Boot the default kernel recovery mode (selected in the "Advanced options ..."):
     boot_grub_item(2, 2);
 
 =cut
+
 sub boot_grub_item {
     my ($menu1, $menu2) = @_;
     $menu1 //= 3;
@@ -257,7 +270,14 @@ sub boot_local_disk {
         }
         my @tags = qw(inst-slof grub2);
         push @tags, 'encrypted-disk-password-prompt' if (get_var('ENCRYPT'));
-        assert_screen(\@tags);
+
+        # Workaround for poo#118336
+        if (is_ppc64le && is_qemu) {
+            push @tags, 'linux-login' if check_var('DESKTOP', 'textmode');
+            push @tags, 'displaymanager' if check_var('DESKTOP', 'gnome');
+        }
+
+        assert_screen(\@tags, 60);
         if (match_has_tag 'grub2') {
             diag 'already in grub2, returning from boot_local_disk';
             stop_grub_timeout;
@@ -275,26 +295,29 @@ sub boot_local_disk {
             # Simply return and do enter passphrase operation in checking block of sub wait_boot
             return;
         }
+        if (match_has_tag('linux-login') or match_has_tag('displaymanager')) {
+            return;
+        }
     }
     send_key 'ret';
 }
 
 sub boot_into_snapshot {
-    send_key_until_needlematch('boot-menu-snapshot', 'down', 10, 5);
+    send_key_until_needlematch('boot-menu-snapshot', 'down', 11, 5);
     send_key 'ret';
     # assert needle to make sure grub2 page show up
     assert_screen('grub2-page', 60);
     # assert needle to avoid send down key early in grub_test_snapshot.
     if (get_var('OFW') || is_pvm || check_var('SLE_PRODUCT', 'hpc')) {
-        send_key_until_needlematch('snap-default', 'down', 60, 5);
+        send_key_until_needlematch('snap-default', 'down', 61, 5);
     }
     # in upgrade/migration scenario, we want to boot from snapshot 1 before migration.
     if ((get_var('UPGRADE') && !get_var('ONLINE_MIGRATION', 0)) || get_var('ZDUP')) {
-        send_key_until_needlematch('snap-before-update', 'down', 60, 5);
+        send_key_until_needlematch('snap-before-update', 'down', 61, 5);
         save_screenshot;
     }
     # in an online migration
-    send_key_until_needlematch('snap-before-migration', 'down', 60, 5) if (get_var('ONLINE_MIGRATION'));
+    send_key_until_needlematch('snap-before-migration', 'down', 61, 5) if (get_var('ONLINE_MIGRATION'));
     save_screenshot;
     send_key 'ret';
     # avoid timeout for booting to HDD
@@ -319,17 +342,17 @@ sub select_bootmenu_option {
 
     if (get_var('UPGRADE')) {
         # OFW has contralily oriented menu behavior
-        send_key_until_needlematch 'inst-onupgrade', get_var('OFW') ? 'up' : 'down', 10, 5;
+        send_key_until_needlematch 'inst-onupgrade', get_var('OFW') ? 'up' : 'down', 11, 5;
     }
     else {
         if (get_var('PROMO') || get_var('LIVETEST') || get_var('LIVE_INSTALLATION') || get_var('LIVE_UPGRADE')) {
-            send_key_until_needlematch 'boot-live-' . get_var('DESKTOP'), 'down', 10, 5;
+            send_key_until_needlematch 'boot-live-' . get_var('DESKTOP'), 'down', 11, 5;
         }
         elsif (get_var('OFW')) {
-            send_key_until_needlematch 'inst-oninstallation', 'up', 10, 5;
+            send_key_until_needlematch 'inst-oninstallation', 'up', 11, 5;
         }
         elsif (!get_var('JEOS')) {
-            send_key_until_needlematch 'inst-oninstallation', 'down', 10, 5;
+            send_key_until_needlematch 'inst-oninstallation', 'down', 11, 5;
         }
     }
     return 0;
@@ -356,9 +379,9 @@ sub get_bootmenu_console_params {
 sub uefi_bootmenu_params {
     # assume bios+grub+anim already waited in start.sh
     # in grub2 it's tricky to set the screen resolution
-    #send_key_until_needlematch('grub2-enter-edit-mode', 'e', 5, 0.5);
+    #send_key_until_needlematch('grub2-enter-edit-mode', 'e', 6, 0.5);
     (is_jeos)
-      ? send_key_until_needlematch('grub2-enter-edit-mode', 'e', 5, 0.5)
+      ? send_key_until_needlematch('grub2-enter-edit-mode', 'e', 6, 0.5)
       : send_key 'e';
     # Kiwi in TW uses grub2-mkconfig instead of the custom kiwi config
     # Locate gfxpayload parameter and update it
@@ -441,6 +464,7 @@ Returns array of strings C<@params> with linurc boot options to enable logging t
 console, enable core dumps and set debug level for logging.
 
 =cut
+
 sub get_linuxrc_boot_params {
     my @params;
     push @params, "linuxrc.log=/dev/$serialdev";
@@ -630,10 +654,10 @@ sub select_bootmenu_more {
 
     # after installation-images 14.210 added a submenu
     if ($more && check_screen 'inst-submenu-more', 0) {
-        send_key_until_needlematch('inst-onmore', get_var('OFW') ? 'up' : 'down', 10, 5);
+        send_key_until_needlematch('inst-onmore', get_var('OFW') ? 'up' : 'down', 11, 5);
         send_key "ret";
     }
-    send_key_until_needlematch($tag, get_var('OFW') ? 'up' : 'down', 10, 3);
+    send_key_until_needlematch($tag, get_var('OFW') ? 'up' : 'down', 11, 3);
     # Redirect linuxrc logs to console when booting from menu: "boot linux system"
     push @params, get_linuxrc_boot_params if get_var('LINUXRC_BOOT');
     # Make sure to use the correct repo for testing
@@ -819,7 +843,7 @@ sub remote_install_bootmenu_params {
 sub select_bootmenu_video_mode {
     if (check_var("VIDEOMODE", "text")) {
         send_key "f3";
-        send_key_until_needlematch("inst-textselected", "up", 5);
+        send_key_until_needlematch("inst-textselected", "up", 6);
         send_key "ret";
         if (match_has_tag("inst-textselected-with_colormenu")) {
             # The video mode menu was enhanced to support various color profiles
@@ -941,11 +965,11 @@ sub tianocore_disable_secureboot {
     enter_cmd "exit";
     assert_screen 'tianocore-mainmenu';
     # Select 'Boot manager' entry
-    send_key_until_needlematch('tianocore-devicemanager', 'down', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager', 'down', 6, 5);
     send_key 'ret';
-    send_key_until_needlematch('tianocore-devicemanager-sb-conf', 'down', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager-sb-conf', 'down', 6, 5);
     send_key 'ret';
-    send_key_until_needlematch($neelle_sb_conf_attempt, 'down', 5, 5);
+    send_key_until_needlematch($neelle_sb_conf_attempt, 'down', 6, 5);
     send_key 'spc';
     assert_screen 'tianocore-devicemanager-sb-conf-changed';
     send_key 'ret';
@@ -960,27 +984,63 @@ sub tianocore_disable_secureboot {
     $basetest->wait_grub;
 }
 
+sub tianocore_ensure_svga_resolution {
+    assert_screen 'tianocore-mainmenu';
+    send_key_until_needlematch 'tianocore-devicemanager', 'down';
+    send_key 'ret';
+    assert_screen 'tianocore-devicemanager-select-secure-boot';
+    send_key_until_needlematch 'tianocore-devicemanager-select-ovmf-platform', 'down';
+    send_key 'ret';
+    assert_screen [qw(tianocore-ovmf-settings-select-resolution-800x600 tianocore-ovmf-settings-select-resolution)];
+
+    # Check resolution and change it if it isn't 800x600
+    unless (match_has_tag 'tianocore-ovmf-settings-select-resolution-800x600') {
+        assert_screen 'tianocore-ovmf-settings-select-resolution';
+        send_key 'ret';
+        send_key_until_needlematch 'tianocore-ovmf-settings-select-resolution-800x600-popup', 'down';
+        send_key 'ret';
+        assert_screen 'tianocore-ovmf-settings-select-resolution-800x600';
+        send_key 'f10';
+        assert_screen 'tianocore-ovmf-save-settings';
+        send_key 'y';
+        assert_screen 'tianocore-ovmf-settings-select-resolution-800x600';
+    }
+    send_key 'esc';
+    assert_screen 'tianocore-devicemanager-select-ovmf-platform';
+    send_key 'esc';
+    assert_screen 'tianocore-devicemanager';
+    send_key_until_needlematch 'tianocore-select-reset', 'down';
+    wait_screen_change { send_key "ret" };
+}
+
 sub tianocore_select_bootloader {
     tianocore_enter_menu;
-    send_key_until_needlematch('tianocore-bootmanager', 'down', 5, 5);
+    tianocore_ensure_svga_resolution if check_var('QEMUVGA', 'qxl') && get_var('UEFI_PFLASH_VARS', '') !~ /800x600/;
+    tianocore_enter_menu;
+    send_key_until_needlematch('tianocore-bootmanager', 'down', 6, 5);
     send_key 'ret';
+}
+
+sub tianocore_set_svga_resolution {
+    tianocore_enter_menu;
+    tianocore_ensure_svga_resolution;
 }
 
 sub tianocore_http_boot {
     tianocore_enter_menu;
     # Go to Device manager
-    send_key_until_needlematch('tianocore-devicemanager', 'down', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager', 'down', 6, 5);
     send_key 'ret';
     # In device manager, go to 'Network Device List'
-    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist', 'up', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist', 'up', 6, 5);
     send_key 'ret';
     # In 'Network Device List', go to first MAC addr
     send_key 'ret';
     # Go to 'HTTP Boot Configuration'
-    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist-mac-httpbootconfig', 'up', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist-mac-httpbootconfig', 'up', 6, 5);
     send_key 'ret';
     # Select 'Boot URI'
-    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist-mac-httpbootconfig-booturi', 'up', 5, 5);
+    send_key_until_needlematch('tianocore-devicemanager-networkdevicelist-mac-httpbootconfig-booturi', 'up', 6, 5);
     send_key 'ret';
     # Enter URI (full URI to EFI file)
     my $arch = get_var("ARCH");
@@ -1011,10 +1071,10 @@ sub tianocore_http_boot {
     send_key 'esc';
     send_key 'esc';
     # Select 'Boot manager' entry
-    send_key_until_needlematch('tianocore-bootmanager', 'down', 5, 5);
+    send_key_until_needlematch('tianocore-bootmanager', 'down', 6, 5);
     send_key 'ret';
     # Select 'UEFI Http' entry
-    send_key_until_needlematch('tianocore-bootmanager-uefihttp', 'up', 5, 5);
+    send_key_until_needlematch('tianocore-bootmanager-uefihttp', 'up', 6, 5);
     send_key 'ret';
 }
 
@@ -1137,6 +1197,7 @@ sub ensure_shim_import {
 
 Search for C<$pattern> in /etc/default/grub, return 1 if found.
 =cut
+
 sub grep_grub_settings {
     die((caller(0))[3] . ' expects 1 arguments') unless @_ == 1;
     my $pattern = shift;
@@ -1150,6 +1211,7 @@ sub grep_grub_settings {
 Search for C<$pattern> in grub cmdline variable (usually
 GRUB_CMDLINE_LINUX_DEFAULT) in /etc/default/grub, return 1 if found.
 =cut
+
 sub grep_grub_cmdline_settings {
     my ($pattern, $search) = @_;
     $search //= get_cmdline_var();
@@ -1166,6 +1228,7 @@ C<$search> meant to be for changing only particular line for sed,
 C<$modifiers> for sed replacement, e.g. "g".
 C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
 =cut
+
 sub change_grub_config {
     die((caller(0))[3] . ' expects from 3 to 5 arguments') unless (@_ >= 3 && @_ <= 5);
     my ($old, $new, $search, $modifiers, $update_grub) = @_;
@@ -1191,6 +1254,7 @@ Add C<$add> into /etc/default/grub, using sed.
 C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
 C<$search> if set, bypass default grub cmdline variable.
 =cut
+
 sub add_grub_cmdline_settings {
     my $add = shift;
     my %args = testapi::compat_args(
@@ -1213,9 +1277,23 @@ sub add_grub_cmdline_settings {
 Add C<$add> into /etc/default/grub, using sed.
 C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
 =cut
+
 sub add_grub_xen_cmdline_settings {
     my ($add, $update_grub) = @_;
     add_grub_cmdline_settings($add, $update_grub, "GRUB_CMDLINE_XEN_DEFAULT");
+}
+
+=head2 add_grub_xen_replace_cmdline_settings
+
+    add_grub_xen_replace_cmdline_settings($add [, $update_grub ]);
+
+Add C<$add> into /etc/default/grub, using sed.
+C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
+=cut
+
+sub add_grub_xen_replace_cmdline_settings {
+    my ($add, $update_grub) = @_;
+    add_grub_cmdline_settings($add, update_grub => $update_grub, search => "GRUB_CMDLINE_LINUX_XEN_REPLACE_DEFAULT");
 }
 
 =head2 replace_grub_cmdline_settings
@@ -1226,6 +1304,7 @@ Replace C<$old> with C<$new> in /etc/default/grub, using sed.
 C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
 C<$search> if set, bypass default grub cmdline variable.
 =cut
+
 sub replace_grub_cmdline_settings {
     my $old = shift;
     my $new = shift;
@@ -1249,6 +1328,7 @@ sub replace_grub_cmdline_settings {
 Replace C<$old> with C<$new> in /etc/default/grub, using sed.
 C<$update_grub> if set, regenerate /boot/grub2/grub.cfg with grub2-mkconfig and upload configuration.
 =cut
+
 sub replace_grub_xen_cmdline_settings {
     my ($old, $new, $update_grub) = @_;
     replace_grub_cmdline_settings($old, $new, $update_grub, "GRUB_CMDLINE_XEN_DEFAULT");
@@ -1261,6 +1341,7 @@ sub replace_grub_xen_cmdline_settings {
 Remove C<$remove> from /etc/default/grub (using sed) and regenerate /boot/grub2/grub.cfg.
 Search line C<$search> from /etc/default/grub (use for sed).
 =cut
+
 sub remove_grub_cmdline_settings {
     my ($remove, $search) = @_;
     replace_grub_cmdline_settings('[[:blank:]]*' . $remove . '[[:blank:]]*', " ", "g", $search);
@@ -1272,6 +1353,7 @@ sub remove_grub_cmdline_settings {
 
 Remove C<$remove> from /etc/default/grub (using sed) and regenerate /boot/grub2/grub.cfg.
 =cut
+
 sub remove_grub_xen_cmdline_settings {
     my $remove = shift;
     remove_grub_cmdline_settings($remove, "GRUB_CMDLINE_XEN_DEFAULT");
@@ -1284,10 +1366,12 @@ sub remove_grub_xen_cmdline_settings {
 
 Regenerate /boot/grub2/grub.cfg with grub2-mkconfig.
 =cut
+
 sub grub_mkconfig {
     my $config = shift;
     $config //= GRUB_CFG_FILE;
-    assert_script_run("grub2-mkconfig -o $config");
+    my $grub_update = is_transactional ? 'transactional-update -c grub.cfg' : "grub2-mkconfig -o $config";
+    assert_script_run "${grub_update}";
 }
 
 =head2 get_cmdline_var
@@ -1297,6 +1381,7 @@ sub grub_mkconfig {
 Get default grub cmdline variable:
 GRUB_CMDLINE_LINUX for JeOS, GRUB_CMDLINE_LINUX_DEFAULT for the rest.
 =cut
+
 sub get_cmdline_var {
     my $label = is_jeos() ? 'GRUB_CMDLINE_LINUX' : 'GRUB_CMDLINE_LINUX_DEFAULT';
     return "^${label}=";
@@ -1374,6 +1459,7 @@ Method accepts C<disk> to define the device to work with, C<passwd> and C<shadow
 store content of the /etc/passwd and /etc/shadow files accordingly.
 
 =cut
+
 sub mimic_user_to_import {
     my (%args) = @_;
     my $disk = $args{disk};
@@ -1410,6 +1496,7 @@ Is handy for the bare metal setups and LPARs where we can have traces of
 previous installation.
 
 =cut
+
 sub prepare_disks {
     # Delete partition table before starting installation
     select_console('install-shell');
@@ -1429,11 +1516,28 @@ sub prepare_disks {
             }
         }
         else {
-            script_run "parted /dev/$d mklabel gpt";
+            script_run "parted -s /dev/$d mklabel gpt";
             script_run "sync";
         }
     }
     script_run "lsblk";
+}
+
+=head2 sync_time
+
+    sync_time
+
+Sync system time, time offset can cause problems e.g. certificate is not yet valid
+
+=cut
+
+sub sync_time {
+    # sync system time before installation
+    select_console('install-shell');
+
+    script_run 'chronyd';
+    script_run 'chronyc makestep';
+    script_run 'date';
 }
 
 1;

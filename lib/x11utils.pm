@@ -26,6 +26,7 @@ our @EXPORT = qw(
   select_user_gnome
   turn_off_screensaver
   turn_off_kde_screensaver
+  turn_off_plasma_tooltips
   turn_off_plasma_screen_energysaver
   turn_off_plasma_screenlocker
   turn_off_gnome_screensaver
@@ -35,6 +36,7 @@ our @EXPORT = qw(
   turn_off_gnome_show_banner
   untick_welcome_on_next_startup
   start_root_shell_in_xterm
+  x11_start_program_xterm
   handle_gnome_activities
 );
 
@@ -54,7 +56,8 @@ Returns the hotkey for the desktop runner according to the used
 desktop
 
 =cut
-sub desktop_runner_hotkey { check_var('DESKTOP', 'minimalx') ? 'super-spc' : 'alt-f2' }
+
+sub desktop_runner_hotkey { check_var('DESKTOP', 'minimalx') ? 'ctrl-alt-spc' : 'alt-f2' }
 
 
 =head2
@@ -66,6 +69,7 @@ screen lock is necessary when switch back to x11
 all possible options should be handled within loop to get unlocked desktop
 
 =cut
+
 sub ensure_unlocked_desktop {
     my $counter = 10;
 
@@ -178,6 +182,7 @@ sub ensure_unlocked_desktop {
                 send_key 'esc';    # end screenlock
                 diag("Screen lock present");
             };
+            next;    # Go directly to assert_screen, skip wait_still_screen (and don't collect $200)
         }
         wait_still_screen 1;    # slow down loop
     }
@@ -190,6 +195,7 @@ sub ensure_unlocked_desktop {
 C<tag> can contain a needle name and is optional, it defaults to yast2-windowborder
 
 =cut
+
 sub ensure_fullscreen {
     my (%args) = @_;
     $args{tag} //= 'yast2-windowborder';
@@ -248,6 +254,7 @@ Example:
   handle_login('user1', 1);
 
 =cut
+
 sub handle_login {
     my ($myuser, $user_selected, $mypwd) = @_;
     $myuser //= $username;
@@ -259,7 +266,7 @@ sub handle_login {
     # Previously this pressed esc, but that makes the text field in SDDM lose focus
     # we need send key 'esc' to quit screen saver when desktop is gnome
     my $mykey = check_var('DESKTOP', 'gnome') ? 'esc' : 'shift';
-    send_key_until_needlematch('displaymanager', $mykey, 30, 3);
+    send_key_until_needlematch('displaymanager', $mykey, 31, 3);
     if (get_var('ROOTONLY')) {
         # we now use this tag to support login as root
         if (check_screen 'displaymanager-username-notlisted', 10) {
@@ -303,6 +310,7 @@ sub handle_login {
 Handles the logout from the desktop
 
 =cut
+
 sub handle_logout {
     # hide mouse for clean logout needles
     mouse_hide();
@@ -326,6 +334,7 @@ sub handle_logout {
 First logs out and the log in via C<handle_logout()> and C<handle_login()>
 
 =cut
+
 sub handle_relogin {
     handle_logout;
     handle_login;
@@ -340,6 +349,7 @@ C<$myuser> specifies the username to switch to.
 If not set, it will default to C<$username>.
 
 =cut
+
 sub select_user_gnome {
     my ($myuser) = @_;
     $myuser //= $username;
@@ -370,6 +380,7 @@ sub select_user_gnome {
 Turns off the Plasma desktop screen energy saving.
 
 =cut
+
 sub turn_off_plasma_screen_energysaver {
     x11_start_program('kcmshell5 powerdevilprofilesconfig', target_match => [qw(kde-energysaver-enabled energysaver-disabled)]);
     assert_and_click 'kde-disable-energysaver' if match_has_tag('kde-energysaver-enabled');
@@ -381,11 +392,12 @@ sub turn_off_plasma_screen_energysaver {
 
 =head2 turn_off_plasma_screenlocker
 
- turnoff_plasma_screenlocker()
+ turn_off_plasma_screenlocker()
 
 Turns off the Plasma desktop screenlocker.
 
 =cut
+
 sub turn_off_plasma_screenlocker {
     x11_start_program('kcmshell5 screenlocker', target_match => [qw(kde-screenlock-enabled screenlock-disabled)]);
     assert_and_click 'kde-disable-screenlock' if match_has_tag('kde-screenlock-enabled');
@@ -393,6 +405,20 @@ sub turn_off_plasma_screenlocker {
     # Was 'alt-o' before, but does not work in Plasma 5.17 due to kde#411758
     send_key 'ctrl-ret';
     assert_screen 'generic-desktop';
+}
+
+=head2 turn_off_plasma_tooltips
+
+  turn_off_plasma_tooltips()
+
+Disable Plasma tooltips, especially the one triggered by the "Peek Desktop" below the default
+mouse_hide location can break needles and break or slow down matches.
+
+=cut
+
+sub turn_off_plasma_tooltips {
+    x11_start_program('kwriteconfig5 --file plasmarc --group PlasmaToolTips --key Delay -- -1',
+        target_match => 'generic-desktop', no_wait => 1) if check_var('DESKTOP', 'kde');
 }
 
 =head2 turn_off_kde_screensaver
@@ -404,6 +430,7 @@ desktop. Call before tests that are not providing input for a long time, to
 prevent needles from failing.
 
 =cut
+
 sub turn_off_kde_screensaver {
     turn_off_plasma_screenlocker;
     turn_off_plasma_screen_energysaver;
@@ -416,6 +443,7 @@ sub turn_off_kde_screensaver {
 Disable screensaver in gnome. To be called from a command prompt, for example an xterm window.
 
 =cut
+
 sub turn_off_gnome_screensaver {
     script_run 'gsettings set org.gnome.desktop.session idle-delay 0', die_on_timeout => 0, timeout => 90;
 }
@@ -428,6 +456,7 @@ Disable screensaver in gnome for gdm. The function should be run under root. To 
 a command prompt, for example an xterm window.
 
 =cut
+
 sub turn_off_gnome_screensaver_for_gdm {
     script_run 'sudo -u gdm dbus-launch gsettings set org.gnome.desktop.session idle-delay 0';
 }
@@ -440,6 +469,7 @@ Disable screensaver in gnome for running gdm. The function should be run under r
 from a command prompt, for example an xterm window.
 
 =cut
+
 sub turn_off_gnome_screensaver_for_running_gdm {
     script_run 'su gdm -s /bin/bash -c "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u gdm)/bus gsettings set org.gnome.desktop.session idle-delay 0"';
 }
@@ -451,6 +481,7 @@ sub turn_off_gnome_screensaver_for_running_gdm {
 Disable suspend in gnome. To be called from a command prompt, for example an xterm window.
 
 =cut
+
 sub turn_off_gnome_suspend {
     script_run 'gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type \'nothing\'';
 }
@@ -462,6 +493,7 @@ sub turn_off_gnome_suspend {
 Turns off the screensaver depending on desktop environment
 
 =cut
+
 sub turn_off_screensaver {
     return turn_off_kde_screensaver if check_var('DESKTOP', 'kde');
     die "Unsupported desktop '" . get_var('DESKTOP', '') . "'" unless check_var('DESKTOP', 'gnome');
@@ -482,6 +514,7 @@ sub turn_off_gnome_show_banner {
 untick welcome page on next startup.
 
 =cut
+
 sub untick_welcome_on_next_startup {
     # Untick box - (Retries may be needed: poo#56024)
     for my $retry (1 .. 5) {
@@ -507,6 +540,7 @@ Disable auto-launch on next boot and close application.
 Also handle workarounds when needed.
 
 =cut
+
 sub handle_welcome_screen {
     my (%args) = @_;
     assert_screen([qw(opensuse-welcome opensuse-welcome-gnome40-activities)], $args{timeout});
@@ -521,6 +555,7 @@ sub handle_welcome_screen {
 Start a root shell in xterm.
 
 =cut
+
 sub start_root_shell_in_xterm {
     select_console 'x11';
     x11_start_program("xterm -geometry 155x50+5+5", target_match => 'xterm');
@@ -531,12 +566,30 @@ sub start_root_shell_in_xterm {
     become_root;
 }
 
+=head2 x11_start_program_xterm
+
+    x11_start_program_xterm()
+
+Start xterm, if it is not focused, record a soft-failure and focus the xterm window.
+
+=cut
+
+sub x11_start_program_xterm {
+    x11_start_program('xterm', target_match => [qw(xterm xterm-without-focus)]);
+    if (match_has_tag 'xterm-without-focus') {
+        record_soft_failure('poo#111752: xterm is not focused');
+        click_lastmatch;
+        assert_screen 'xterm';
+    }
+}
+
 =head2 handle_gnome_activities
 
     handle_gnome_activities()
 
 handle_gnome_activities
 =cut
+
 sub handle_gnome_activities {
     my @tags = 'generic-desktop';
     my $timeout = 600;

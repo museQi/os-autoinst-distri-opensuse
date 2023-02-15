@@ -33,6 +33,7 @@ Possible values for C<$mode> are: SSL, NSS, NSSFIPS, PHP7 and PHP8
  setup_apache2(mode => 'SSL');
 
 =cut
+
 sub setup_apache2 {
     my %args = @_;
     my $mode = uc $args{mode} || "";
@@ -40,7 +41,7 @@ sub setup_apache2 {
     my @packages = qw(apache2 /bin/hostname);
 
     # For gensslcert
-    push @packages, 'apache2-utils' if is_tumbleweed;
+    push @packages, 'apache2-utils', 'openssl' if is_tumbleweed;
 
     if (($mode eq "NSS") && get_var("FIPS")) {
         $mode = "NSSFIPS";
@@ -49,13 +50,15 @@ sub setup_apache2 {
         push @packages, qw(apache2-mod_nss mozilla-nss-tools expect);
     }
 
-    if ($mode eq "PHP7") {
+    if ($mode eq "PHP5") {
+        push @packages, qw(apache2-mod_php5 php5);
+        zypper_call("rm -u apache2-mod_php{7,8} php{7,8}", exitcode => [0, 104]);
+    }
+    elsif ($mode eq "PHP7") {
         push @packages, qw(apache2-mod_php7 php7);
-        push @packages, qw(php7-cli) unless (is_sle("<15-SP4") || is_leap("<15.4"));
         zypper_call("rm -u apache2-mod_php{5,8} php{5,8}", exitcode => [0, 104]);
     }
-
-    if ($mode eq "PHP8") {
+    elsif ($mode eq "PHP8") {
         push @packages, qw(apache2-mod_php8 php8-cli);
         zypper_call("rm -u apache2-mod_php{5,7} php{5,7}", exitcode => [0, 104]);
     }
@@ -64,15 +67,18 @@ sub setup_apache2 {
     my $timeout = is_aarch64 ? 1200 : 300;
     zypper_call("--no-gpg-checks in @packages", timeout => $timeout);
 
-    # Enable php7
-    if ($mode eq "PHP7") {
+    # Enable php5
+    if ($mode eq "PHP5") {
+        assert_script_run 'a2enmod -d php7';
+        assert_script_run 'a2enmod -d php8';
+        assert_script_run 'a2enmod php5';
+    }    # Enable php7
+    elsif ($mode eq "PHP7") {
         assert_script_run 'a2enmod -d php5';
         assert_script_run 'a2enmod -d php8';
         assert_script_run 'a2enmod php7';
-    }
-
-    # Enable php8
-    if ($mode eq "PHP8") {
+    }    # Enable php8
+    elsif ($mode eq "PHP8") {
         assert_script_run 'a2enmod -d php5';
         assert_script_run 'a2enmod -d php7';
         assert_script_run 'a2enmod php8';
@@ -154,6 +160,10 @@ sub setup_apache2 {
     if ($mode =~ /PHP/) {
         assert_script_run "curl --no-buffer http://localhost/index.php | grep \"\$(uname -s -n -r -v -m)\"";
     }
+
+    if ($mode eq "NSS" or $mode eq "NSSFIPS") {
+        assert_script_run 'rm /etc/apache2/vhosts.d/vhost-nss.conf';
+    }
 }
 
 =head2 setup_pgsqldb
@@ -163,6 +173,7 @@ sub setup_apache2 {
 Set up a postgres data base
 
 =cut
+
 sub setup_pgsqldb {
     # without changing current working directory we get:
     # 'could not change directory to "/root": Permission denied'
@@ -183,6 +194,7 @@ sub setup_pgsqldb {
 Destroy a postgres data base
 
 =cut
+
 sub destroy_pgsqldb {
     assert_script_run 'pushd /tmp';
 
@@ -221,9 +233,11 @@ Set up a postgres database and configure for:
 =back
 
 =cut
+
 sub test_pgsql {
     # configuration so that PHP can access PostgreSQL
     # setup password
+    assert_script_run 'pushd /tmp';
     enter_cmd "sudo -u postgres psql postgres";
     wait_still_screen(1);
     enter_cmd "\\password postgres";
@@ -256,6 +270,7 @@ sub test_pgsql {
     # add sudo rights to switch postgresql version and run script to determine oldest and latest version
     assert_script_run 'echo "postgres ALL=(root) NOPASSWD: ALL" >>/etc/sudoers';
     assert_script_run "gpasswd -a postgres \$(stat -c %G /dev/$serialdev)";
+    assert_script_run 'sudo chsh postgres -s /bin/bash';
     enter_cmd "su - postgres", wait_still_screen => 1;
     enter_cmd "PS1='# '", wait_still_screen => 1;
     # upgrade db from oldest version to latest version
@@ -356,6 +371,8 @@ EOF
     assert_script_run 'p -d dvdrental -c "SELECT * FROM customer WHERE first_name = \'openQA\'"|grep openQA';
     assert_script_run 'p -d dvdrental -c "SELECT * FROM customer WHERE last_name = \'Davidson\'"|grep Davidson';
     enter_cmd 'exit', wait_still_screen => 3;
+    assert_script_run 'popd';
+
 }
 
 =head2 test_mysql
@@ -365,6 +382,7 @@ EOF
 Create the 'openQAdb' database with table 'test' and insert one element
 
 =cut
+
 sub test_mysql {
     # create the 'openQAdb' database with table 'test' and insert one element 'can php read this?'
     my $setup_openQAdb = "CREATE DATABASE openQAdb; USE openQAdb; " .

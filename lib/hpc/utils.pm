@@ -12,6 +12,8 @@ use warnings;
 use testapi;
 use utils;
 use version_utils 'is_sle';
+use serial_terminal 'select_serial_terminal';
+use version;
 
 sub get_mpi() {
     my $mpi = get_required_var('MPI');
@@ -38,6 +40,7 @@ will be used(mpich, openmpi, mvapich2).
 Returns an array with the mpi compiler and the source code located in /data/hpc
 
 =cut
+
 sub get_mpi_src {
     return ('mpicc', 'simple_mpi.c') unless get_var('HPC_LIB', '');
     # not a boost lib. but using it we can distiguish between `.c` and `.cpp` source code
@@ -53,14 +56,16 @@ This sub logouts the root user and relogins him from terminal.
 Useful to rerun configuration scripts after some changes
 
 =cut
+
 sub relogin_root {
     my $self = shift;
-    record_info 'relogin', 'user needs to logout and login back to trigger scripts which set env variales and others';
-
-    type_string('pkill -u root');
+    record_info 'relogin', 'user needs to logout and login back to trigger scripts which set env variales and others. Switch to root-console';
+    select_console "root-console";
+    type_string('pkill -u root', lf => 1);
     record_info "pkill done";
-    $self->wait_boot_textmode(ready_time => 30);
-    select_console('root-virtio-terminal');
+    $self->wait_boot_textmode(ready_time => 180);
+    select_serial_terminal();
+
     # Make sure that sshd is up. (TODO: investigate)
     systemctl('restart sshd');
 }
@@ -75,6 +80,7 @@ L<https://documentation.suse.com/sle-hpc/15-SP3/single-html/hpc-guide/#sec-compu
 When subroutine returns immediately returns 1 to indicate that no relogin has occurred.
 
 =cut
+
 sub setup_scientific_module {
     my ($self) = @_;
     return 1 unless get_var('HPC_LIB', '');
@@ -91,5 +97,46 @@ sub setup_scientific_module {
     }
     return 0;
 }
+
+=head2 compare_mpi_versions
+
+ compare_mpi_versions($package_name, $package_version, $another_package_version);
+
+Given an HPC package, compare C<package_version> against C<another_package_version>.
+The default behavior is to compare any given C<another_package_version> with the
+installed version. In that case C<package_version> is determined in runtime.
+
+=begin perl
+ self->compare_mpi_versions("openmpi3-gnu-hpc", undef, '3.1.6-150500.11.3'));
+=end perl
+
+=for comment
+C<package_name> can be undef. This it will compare just two given version
+
+=for comment
+Version format <mpi_version>-<hpc_module_vesrion>
+=begin perl
+ self->compare_mpi_versions(undef, $versionA, '3.1.6-150500.11.3'));
+=end perl
+
+It checks first if the package version is bigger than C<another_package_version> and
+then compares its HPC versions. Returns I<true> bool when C<package_version> is bigger
+than C<another_package_version>.
+
+=cut
+
+sub compare_mpi_versions {
+    my ($self, $package_name, $v1, $v2) = @_;
+    my $installed_version;
+    if ($package_name) {
+        script_run("zypper se -i $package_name") == 0 || die "package is not installed";
+        $installed_version = script_output("zypper -q info $package_name | grep Version | awk '{ print \$3 }'");
+    }
+    $v1 ||= $installed_version || die "missing parameter: mpi package version";
+    $v2 ||= die "missing parameter: mpi package version";
+    my $mpi_version_pattern = qr/^(\d{1,2}\.\d{1,2}\.\d{1,2})-(\d+.\d{1,2}\.\d{1,2})/;
+    my @expected_version = $v1 =~ $mpi_version_pattern;
+    my @any_version = $v2 =~ $mpi_version_pattern;
+    return (version->parse($expected_version[0]) >= version->parse($any_version[0])) || (version->parse($expected_version[1]) >= version->parse($any_version[1])); }
 
 1;

@@ -29,21 +29,26 @@ conditional_schedule:
         FLAVOR:
             'JeOS-for-kvm-and-xen-Updates':
                 - qa_automation/patch_and_reboot
+    wizard:
+        FIRST_BOOT_CONFIG:
+            'wizard':
+                - jeos/firstrun
+            'cloud-init':
+                - installation/first_boot
 schedule:
     - '{{bootloader}}'
-    - jeos/firstrun
-    - jeos/image_info
+    - '{{wizard}}'
+    # - jeos/image_info
     - jeos/record_machine_id
-    - console/system_prepare
     - console/force_scheduled_tasks
     - jeos/grub2_gfxmode
     - jeos/diskusage
     - jeos/build_key
     - console/prjconf_excluded_rpms
     - console/journal_check
-    - console/pam
     - microos/libzypp_config
     - console/suseconnect_scc
+    - console/pam
     - '{{maintenance}}'
     - '{{efi}}'
     - jeos/glibc_locale
@@ -52,6 +57,7 @@ schedule:
     - console/consoletest_setup
     - '{{udev_dep}}'
     - locale/keymap_or_locale
+    - console/ping
     - console/apache
     - console/dns_srv
     - console/postgresql_server

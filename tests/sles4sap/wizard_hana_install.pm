@@ -5,12 +5,13 @@
 
 # Summary: Install HANA with SAP Installation Wizard. Verify installation with
 # sles4sap/hana_test
-# Maintainer: QE-SAP <qe-sap@suse.de>, Ricardo Branco <rbranco@suse.de>
+# Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base 'sles4sap';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils qw(file_content_replace type_string_slow);
 use x11utils qw(turn_off_gnome_screensaver);
 use version_utils qw(package_version_cmp is_sle);
@@ -22,7 +23,7 @@ sub run {
     my $sid = get_required_var('INSTANCE_SID');
     my $instid = get_required_var('INSTANCE_ID');
 
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Check that there is enough RAM for HANA
     my $RAM = $self->get_total_mem();
@@ -60,11 +61,10 @@ sub run {
     send_key_until_needlematch 'sap-wizard-proto-' . $proto . '-selected', 'down';
     send_key 'ret' if check_var('DESKTOP', 'textmode');
     send_key 'alt-p';
-    send_key_until_needlematch 'sap-wizard-inst-master-empty', 'backspace', 30 if check_var('DESKTOP', 'textmode');
+    send_key_until_needlematch 'sap-wizard-inst-master-empty', 'backspace', 31 if check_var('DESKTOP', 'textmode');
     type_string_slow "$path", wait_still_screen => 1;
     save_screenshot;
     send_key $cmd{next};
-    assert_screen 'sap-wizard-copying-media', 120;
     assert_screen 'sap-wizard-supplement-medium', $timeout;    # We need to wait for the files to be copied
     send_key $cmd{next};
     if (package_version_cmp($wizard_package_version, '4.3.0') <= 0) {

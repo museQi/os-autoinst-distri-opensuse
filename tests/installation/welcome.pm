@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright 2009-2013 Bernhard M. Wiedemann
-# Copyright 2012-2020 SUSE LLC
+# Copyright 2012-2022 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Wait for installer welcome screen. Covers loading linuxrc
@@ -17,7 +17,7 @@
 # - Save screenshot
 # - If necessary, change keyboard layout
 # - Proceed install (Next, next) until license on welcome screen is found
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use strict;
 use warnings;
@@ -34,7 +34,7 @@ sub switch_keyboard_layout {
     my $keyboard_layout = get_var('INSTALL_KEYBOARD_LAYOUT');
     # for instance, select france and test "querty"
     send_key 'alt-k';    # Keyboard Layout
-    send_key_until_needlematch("keyboard-layout-$keyboard_layout", 'down', 60);
+    send_key_until_needlematch("keyboard-layout-$keyboard_layout", 'down', 61);
     if (check_var('DESKTOP', 'textmode')) {
         send_key 'ret';
         assert_screen "keyboard-layout-$keyboard_layout-selected";
@@ -47,7 +47,7 @@ sub switch_keyboard_layout {
     assert_screen "keyboard-test-$keyboard_layout";
     # Select back default keyboard layout
     send_key 'alt-k';
-    send_key_until_needlematch("keyboard-layout", 'up', 60);
+    send_key_until_needlematch("keyboard-layout", 'up', 61);
     wait_screen_change { send_key 'ret' } if (check_var('DESKTOP', 'textmode'));
 }
 
@@ -59,20 +59,28 @@ Returns hash which contains shortcuts for the product selection.
 =cut
 sub get_product_shortcuts {
     # sles4sap does have different shortcuts in different tests at same time
-    #     ppc64le x86_64
-    # Full   u      i
-    # QR     i      p
-    # Online i      t
+    #               ppc64le x86_64
+    # Full              u      i
+    # Full (15-SP5)     i      t
+    # QR                i      p
+    # Online            i      t
     if (check_var('SLE_PRODUCT', 'sles4sap')) {
+        return (sles4sap => is_ppc64le() ? 'i' : 't') if get_var('ISO') =~ /Full/ && is_sle('15-SP5+');
         return (sles4sap => is_ppc64le() ? 'u' : 'i') if get_var('ISO') =~ /Full/;
         return (sles4sap => is_ppc64le() ? 'i' : is_quarterly_iso() ? 'p' : 't') unless get_var('ISO') =~ /Full/;
     }
     # We got new products in SLE 15 SP1
     elsif (is_sle '15-SP1+') {
+        # sles does have different shortcuts in different tests at same time
+        #                x86_64
+        # Full              i
+        # Full (15-SP4)     s
         return (sles => 's') if (get_var('ISO') =~ /Full/ && is_ppc64le() && get_var('NTLM_AUTH_INSTALL'));
         return (
-            sles => (is_ppc64le() || is_s390x()) ? 'u'
+            sles => (is_sle '15-SP5+') ? 's'    # for now treat 15-SP5+ as if they would have new shortcuts
+            : (is_ppc64le() || is_s390x()) ? 'u'    # s390 doesn't have a product selection screen for now
             : is_aarch64() ? 's'
+            : ((is_sle '=15-SP4') && (get_var('ISO') =~ /Full/)) ? 's'
             : 'i',
             sled => 'x',
             hpc => is_x86_64() ? 'g' : 'u',
@@ -104,7 +112,7 @@ sub run {
     # Add tag for untrusted-ca-cert with SMT
     push @welcome_tags, 'untrusted-ca-cert' if (get_var('SMT_URL') || get_var('SLP_RMT_INSTALL'));
     # Add tag for sle15 upgrade mode, where product list should NOT be shown
-    push @welcome_tags, 'inst-welcome-no-product-list' if is_sle('15+') and get_var('UPGRADE');
+    push @welcome_tags, 'inst-welcome-no-product-list' if (is_sle('15+') and get_var('UPGRADE') || is_sle_micro);
     # Add tag to check for https://progress.opensuse.org/issues/30823 "test is
     # stuck in linuxrc asking if dhcp should be used"
     push @welcome_tags, 'linuxrc-dhcp-question';
@@ -176,14 +184,19 @@ sub run {
     else {
         assert_screen('inst-welcome');
     }
+
+    my $has_license_on_welcome_screen = (is_sle() || is_sle_micro()) &&
+      match_has_tag('license-agreement');
+    my $has_product_selection = (is_sle() || is_sle_micro()) &&
+      !match_has_tag('inst-welcome-no-product-list');
+
     mouse_hide;
     wait_still_screen(3);
 
 
     # license+lang +product (on sle15)
     # On sle 15 license is on different screen, here select the product
-    # see has_product_selection in case the screen fails again in the future
-    if (has_product_selection) {
+    if ($has_product_selection) {
         assert_screen('select-product');
         my $product = get_required_var('SLE_PRODUCT');
         if (check_var('VIDEOMODE', 'text')) {
@@ -214,7 +227,20 @@ sub run {
     }
 
     switch_keyboard_layout if get_var('INSTALL_KEYBOARD_LAYOUT');
-    send_key $cmd{next} unless has_license_on_welcome_screen;
+    send_key $cmd{next} unless $has_license_on_welcome_screen;
+
+    if ($has_license_on_welcome_screen || $has_product_selection) {
+        assert_screen('license-agreement', 120);
+
+        # optional checks for the extended installation
+        if (get_var('INSTALLER_EXTENDED_TEST')) {
+            $self->verify_license_has_to_be_accepted;
+            $self->verify_license_translations;
+        }
+
+        $self->accept_license;
+        send_key $cmd{next};
+    }
 }
 
 1;

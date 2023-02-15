@@ -17,6 +17,7 @@
 package sssd_openldap_functional;
 use base 'consoletest';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use strict;
 use warnings;
 use utils;
@@ -24,8 +25,7 @@ use version_utils;
 use registration qw(add_suseconnect_product get_addon_fullname);
 
 sub run {
-    my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     if (is_sle) {
         add_suseconnect_product('PackageHub', undef, undef, undef, 300, 1);
         is_sle('<15') ? add_suseconnect_product("sle-module-containers", 12) : add_suseconnect_product("sle-module-containers");
@@ -45,7 +45,7 @@ sub run {
     assert_script_run("mkdir /tmp/sssd && cd /tmp/sssd");
     assert_script_run("curl -s " . "--remote-name-all " . data_url('sssd/openldap/{user.ldif,slapd.conf,Dockerfile,add_test_repositories.sh}'));
     assert_script_run("curl -s " . "--remote-name-all " . data_url('sssd/openldap/ldapserver.{key,crt,csr}'));
-    assert_script_run(qq(docker build -t openldap2_image --build-arg tag="$tag" --build-arg pkgs="$pkgs" --build-arg maint_test_repo="$maint_test_repo" .), timeout => 600);
+    assert_script_run(qq(docker build -t openldap2_image --build-arg tag="$tag" --build-arg pkgs="$pkgs" --build-arg maint_test_repo="$maint_test_repo" .), timeout => 1200);
     assert_script_run('docker run -itd --name ldap_container --hostname ldapserver --restart=always openldap2_image');
     assert_script_run("docker exec ldap_container sed -n '/ldapserver/p' /etc/hosts >> /etc/hosts");
 

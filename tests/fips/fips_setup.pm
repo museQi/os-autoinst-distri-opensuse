@@ -7,7 +7,7 @@
 #          ENV mode - selected by FIPS_ENV_MODE
 #          Global mode - setup fips=1 in kernel command line
 #
-# Maintainer: Ben Chou <bchou@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#39071, poo#105591, poo#105999, poo#109133
 
 use base 'opensusebasetest';
@@ -15,6 +15,7 @@ use strict;
 use warnings;
 use base "consoletest";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils qw(quit_packagekit zypper_call reconnect_mgmt_console package_upgrade_check);
 use bootloader_setup "add_grub_cmdline_settings";
 use power_action_utils "power_action";
@@ -23,7 +24,7 @@ use version_utils 'is_sle';
 
 sub run {
     my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # For installation only. FIPS has already been setup during installation
     # (DVD installer booted with fips=1), so we only do verification here.
@@ -90,7 +91,7 @@ sub run {
     }
 
     # Workaround to resolve console switch issue
-    $self->select_serial_terminal;
+    select_serial_terminal;
     assert_script_run q(grep '^1$' /proc/sys/crypto/fips_enabled) unless (get_var('FIPS_ENV_MODE'));
 }
 

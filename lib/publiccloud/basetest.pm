@@ -15,10 +15,12 @@ use publiccloud::ec2;
 use publiccloud::eks;
 use publiccloud::ecr;
 use publiccloud::gce;
+use publiccloud::gke;
 use publiccloud::gcr;
 use publiccloud::acr;
 use publiccloud::aks;
 use publiccloud::openstack;
+use publiccloud::noprovider;
 use strict;
 use warnings;
 
@@ -30,7 +32,10 @@ sub provider_factory {
 
     $args{provider} //= get_required_var('PUBLIC_CLOUD_PROVIDER');
 
-    if ($args{provider} eq 'EC2') {
+    if (get_var('PUBLIC_CLOUD_INSTANCE_IP')) {
+        $provider = publiccloud::noprovider->new();
+    }
+    elsif ($args{provider} eq 'EC2') {
         $args{service} //= 'EC2';
 
         if ($args{service} eq 'ECR') {
@@ -72,15 +77,10 @@ sub provider_factory {
     elsif ($args{provider} eq 'GCE') {
         $args{service} //= 'GCE';
         if ($args{service} eq 'GCR') {
-            $provider = publiccloud::gcr->new(
-                account => get_var('PUBLIC_CLOUD_GOOGLE_ACCOUNT'),
-                service_acount_name => get_var('PUBLIC_CLOUD_GOOGLE_SERVICE_ACCOUNT'),
-                project_id => get_var('PUBLIC_CLOUD_GOOGLE_PROJECT_ID'),
-                client_id => get_var('PUBLIC_CLOUD_GOOGLE_CLIENT_ID'),
-                region => get_var('PUBLIC_CLOUD_REGION', 'europe-west1-b'),
-                storage_name => get_var('PUBLIC_CLOUD_GOOGLE_STORAGE', 'openqa-storage'),
-                username => get_var('PUBLIC_CLOUD_USER', 'susetest')
-            );
+            $provider = publiccloud::gcr->new();
+        }
+        elsif ($args{service} eq 'GKE') {
+            $provider = publiccloud::gke->new();
         }
         elsif ($args{service} eq 'GCE') {
             $provider = publiccloud::gce->new();
@@ -103,7 +103,7 @@ sub provider_factory {
 
 sub cleanup {
     # to be overridden by tests
-    return;
+    return 1;
 }
 
 sub _cleanup {
@@ -120,8 +120,8 @@ sub _cleanup {
     return if ($flags->{publiccloud_multi_module} && !($self->{result} eq 'fail' && $flags->{fatal}));
     # 2. Job should have PUBLIC_CLOUD_NO_CLEANUP defined and job should have result = 'fail'
     return if ($self->{result} eq 'fail' && get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE'));
-    if ($self->{provider}) {
-        eval { $self->{provider}->cleanup(); } or bmwqemu::fctwarn("provider::cleanup() failed -- $@");
+    if ($self->{run_args} && $self->{run_args}->{my_provider}) {
+        eval { $self->{run_args}->{my_provider}->cleanup($self->{run_args}); } or bmwqemu::fctwarn("provider::cleanup() failed -- $@");
     }
 }
 

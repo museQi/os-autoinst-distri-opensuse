@@ -21,6 +21,7 @@ use base 'consoletest';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils qw(systemctl zypper_call);
 use Utils::Systemd 'disable_and_stop_service';
 use version_utils;
@@ -28,13 +29,12 @@ use Utils::Architectures;
 use services::cups;
 
 sub run {
-    my $self = shift;
-    $self->select_serial_terminal unless (is_s390x);
+    select_serial_terminal unless (is_s390x);
 
     services::cups::install_service();
     services::cups::config_service();
     services::cups::enable_service();
-    services::cups::start_service();
+    services::cups::restart_service();
     services::cups::check_service();
     services::cups::check_function();
 

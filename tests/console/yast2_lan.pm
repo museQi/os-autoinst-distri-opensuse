@@ -24,6 +24,7 @@ use testapi;
 use utils;
 use y2lan_restart_common;
 use version_utils ':VERSION';
+use Utils::Backends 'is_pvm_hmc';
 
 my $module_name;
 
@@ -38,7 +39,8 @@ sub run {
     script_run('ls -alF /etc/sysconfig/network/');
     save_screenshot;
 
-    my $opened = open_yast2_lan();
+    my $y2_opts = is_pvm_hmc() ? "ncurses" : "";
+    my $opened = open_yast2_lan(ui => $y2_opts);
     wait_still_screen(14);
     if ($opened eq "Controlled by network manager") {
         return;
@@ -69,7 +71,7 @@ sub run {
         send_key "tab";
         assert_screen 'yast2_lan-set-hostname-via-dhcp-selected';
         send_key 'down';
-        send_key_until_needlematch("yast2_lan-set-hostname-via-dhcp-NO-selected", "up", 5);
+        send_key_until_needlematch("yast2_lan-set-hostname-via-dhcp-NO-selected", "up", 6);
         send_key "ret";
     }
 

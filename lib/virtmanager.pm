@@ -656,14 +656,14 @@ sub select_guest {
         } else {
             assert_and_click("virt-manager_list-arrowdown", clicktime => 10) for (1 .. 5);    # Go down so we will see every guest unselected on the way up
         }
-        send_key_until_needlematch("virt-manager_list-$guest", 'up', 20, 3);
+        send_key_until_needlematch("virt-manager_list-$guest", 'up', 21, 3);
     }
     assert_and_click "virt-manager_list-$guest";
     send_key 'ret';
     sleep 5;
     if (check_screen 'virt-manager_notrunning') {
         record_info("The Guest was powered off and that should not happen");
-        assert_and_click 'virt-manager_poweron', 'left', 90;
+        assert_and_click 'virt-manager_poweron', button => 'left', timeout => 90;
         sleep 30;    # The boot would not be faster
     }
     if (check_screen('virt-manager_no-graphical-device')) {
@@ -690,7 +690,7 @@ sub powercycle {
             assert_and_click "virt-manager_shutdown_sure";
         }
     }
-    assert_and_click 'virt-manager_poweron', 'left', 90;
+    assert_and_click 'virt-manager_poweron', button => 'left', timeout => 90;
 }
 
 sub establish_connection {

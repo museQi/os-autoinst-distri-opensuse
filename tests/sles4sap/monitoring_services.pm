@@ -8,12 +8,13 @@
 
 use base 'sles4sap';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use strict;
 use warnings;
 use lockapi;
 use Utils::Systemd qw(systemctl);
 use utils qw(file_content_replace zypper_call);
-use hacluster qw(add_file_in_csync get_cluster_name get_hostname is_node wait_until_resources_started);
+use hacluster qw(add_file_in_csync get_cluster_name get_hostname is_node wait_until_resources_started wait_for_idle_cluster);
 
 sub configure_ha_exporter {
     my $exporter_name = 'ha_cluster_exporter';
@@ -66,6 +67,7 @@ sub configure_hanadb_exporter {
     $hanadb_exporter_port ||= 9668;
 
     # Add monitoring resource in the HA stack
+    wait_for_idle_cluster;
     if (get_var('HA_CLUSTER') and is_node(1)) {
         my $hanadb_msl = "msl_SAPHana_$args{rsc_id}";
         my $hanadb_exp_rsc = "rsc_exporter_$args{rsc_id}";
@@ -147,6 +149,7 @@ sub configure_sap_host_exporter {
         assert_script_run "crm configure modgroup grp_$args{rsc_id} add $exporter_rsc";
         assert_script_run "crm resource start $exporter_rsc";
         wait_until_resources_started;
+        wait_for_idle_cluster;
 
         # Release the lock
         mutex_unlock 'support_server_ready';
@@ -180,7 +183,6 @@ sub configure_node_exporter {
 }
 
 sub run {
-    my ($self) = @_;
     my $hostname = get_hostname;
     my $cluster_name = get_cluster_name;
     my $instance_sid = get_required_var('INSTANCE_SID');
@@ -189,7 +191,7 @@ sub run {
     my $rsc_id = "${instance_sid}_${instance_type}${instance_id}";
 
     # Make sure that we have an opened terminal
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Configure Exporters
     configure_ha_exporter if get_var('HA_CLUSTER');

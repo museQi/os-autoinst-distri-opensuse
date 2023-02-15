@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Test custom partitioning selection: Split off '/usr' partition
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'y2_installbase';
 use strict;
@@ -29,7 +29,7 @@ sub run {
     wait_screen_change { send_key "tab" };
     send_key "home";
     wait_still_screen(2);
-    send_key_until_needlematch 'root-partition-selected', 'down', 5, 2;    # Select root partition
+    send_key_until_needlematch 'root-partition-selected', 'down', 6, 2;    # Select root partition
 
     # Resize has been moved under drop down button Modify in storage-ng
     if (is_storage_ng) {

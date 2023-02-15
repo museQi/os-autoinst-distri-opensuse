@@ -13,6 +13,7 @@ use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call s
 use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro);
 use constant ADDONS_COUNT => 50;
 use y2_module_consoletest;
+use YaST::workarounds;
 
 our @EXPORT = qw(
   add_suseconnect_product
@@ -33,6 +34,7 @@ our @EXPORT = qw(
   get_addon_fullname
   rename_scc_addons
   is_module
+  is_phub_ready
   verify_scc
   investigate_log_empty_license
   register_addons_cmd
@@ -104,12 +106,13 @@ sub is_module {
     return defined $SLE15_MODULES{$name};
 }
 
+# Check if Packagehub is available
+sub is_phub_ready {
+    return (check_var('PHUB_READY', '0')) ? 0 : 1;
+}
+
 sub accept_addons_license {
     my (@scc_addons) = @_;
-
-    # Trap the 'missing license file on media' issue
-    # Needle is configured as a workaround, so a soft-fail will be shown
-    send_key 'alt-s' if check_screen('license-insert-disc-issue', 30);
 
     # To check the current state of licenses in the product one can conduct
     # the following steps, e.g. for SLE15:
@@ -130,7 +133,7 @@ sub accept_addons_license {
 
     # In SLE 15 some modules do not have license or have the same
     # license (see bsc#1089163) and so are not be shown twice
-    push @addons_with_license, @SLE15_ADDONS_WITHOUT_LICENSE unless is_sle('15+');
+    push @addons_with_license, @SLE15_ADDONS_WITHOUT_LICENSE unless (is_sle('15+') || is_sle_micro);
     # HA and WE have licenses when calling yast2 scc
     push @addons_with_license, @SLE15_ADDONS_WITH_LICENSE_NOINSTALL if (is_sle('15+') and get_var('IN_PATCH_SLE'));
     # HA does not show EULA when doing migration to 12-SP5
@@ -157,6 +160,7 @@ sub accept_addons_license {
 Helper for parsing SLE RC version into integer. It replaces SLE version
 in format X-SPY into X.Y.
 =cut
+
 sub scc_version {
     my $version = shift;
     $version //= get_required_var('VERSION');
@@ -169,6 +173,7 @@ sub scc_version {
 
 Wrapper for SUSEConnect -p $name.
 =cut
+
 sub add_suseconnect_product {
     my ($name, $version, $arch, $params, $timeout, $retry) = @_;
     assert_script_run 'source /etc/os-release';
@@ -206,6 +211,7 @@ sub add_suseconnect_product {
 
 Wrapper for SUSEConnect -p $name  over ssh.
 =cut
+
 sub ssh_add_suseconnect_product {
     my ($remote, $name, $version, $arch, $params, $timeout, $retries, $delay) = @_;
     assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
@@ -226,6 +232,7 @@ sub ssh_add_suseconnect_product {
 
 Wrapper for SUSEConnect -d $name.
 =cut
+
 sub remove_suseconnect_product {
     my ($name, $version, $arch, $params) = @_;
     $version //= scc_version();
@@ -240,6 +247,7 @@ sub remove_suseconnect_product {
 
 Wrapper for SUSEConnect -d $name over ssh.
 =cut
+
 sub ssh_remove_suseconnect_product {
     my ($remote, $name, $version, $arch, $params) = @_;
     assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
@@ -257,6 +265,7 @@ sub ssh_remove_suseconnect_product {
 Wrapper for SUSEConnect --cleanup. Resets proxy SCC url if job has SCC_URL
 variable set.
 =cut
+
 sub cleanup_registration {
     # Remove registration from the system
     assert_script_run 'SUSEConnect --cleanup';
@@ -272,11 +281,13 @@ sub cleanup_registration {
 Wrapper for SUSEConnect -r <regcode>. Requires SCC_REGCODE variable.
 SUSEConnect --url with SMT/RMT server.
 =cut
+
 sub register_product {
     if (get_var('SMT_URL')) {
         assert_script_run('SUSEConnect --url ' . get_var('SMT_URL') . ' ' . uc(get_var('SLE_PRODUCT')) . '/' . scc_version(get_var('HDDVERSION')) . '/' . get_var('ARCH'), 200);
     } else {
-        assert_script_run('SUSEConnect -r ' . get_required_var('SCC_REGCODE'), 200);
+        my $scc_reg_code = is_sles4sap ? get_required_var('SCC_REGCODE_SLES4SAP') : get_required_var('SCC_REGCODE');
+        assert_script_run('SUSEConnect -r ' . $scc_reg_code, 200);
     }
 }
 
@@ -330,7 +341,7 @@ sub register_addons {
             # skip addons which doesn't need to input scc code
             next unless grep { $addon eq $_ } @addons_with_code;
             if (check_var('VIDEOMODE', 'text')) {
-                send_key_until_needlematch("scc-code-field-$addon", 'tab', 60, 3);
+                send_key_until_needlematch("scc-code-field-$addon", 'tab', 61, 3);
             }
             else {
                 assert_and_click("scc-code-field-$addon", timeout => 240);
@@ -442,7 +453,7 @@ sub process_scc_register_addons {
                 # Uncheck 'Hide Beta Versions'
                 # The workaround with send_key_until_needlematch is added,
                 # because on ppc64le the shortcut key does not reach VM sporadically.
-                send_key_until_needlematch('scc-beta-filter-unchecked', 'alt-i', 3, 5);
+                send_key_until_needlematch('scc-beta-filter-unchecked', 'alt-i', 4, 5);
             }
             else {
                 send_key 'alt-f';    # uncheck 'Filter Out Beta Version'
@@ -514,6 +525,9 @@ sub process_scc_register_addons {
         # start addons/modules registration, it needs longer time if select multiple or all addons/modules
         my $counter = ADDONS_COUNT;
         my @needles = qw(import-untrusted-gpg-key nvidia-validation-failed yast_scc-pkgtoinstall yast-scc-emptypkg inst-addon contacting-registration-server refreshing-repository system-probing);
+
+        # In SLE Micro, we don't need to continue with registering any additional module.
+        return if is_sle_micro;
         if (is_sle('15-SP2+')) {
             # In SLE 15 SP2 multipath detection happens directly after registration, so using it to detect that all pop-up are processed
             push @needles, 'enable-multipath' if get_var('MULTIPATH');
@@ -613,13 +627,12 @@ sub handle_scc_popups {
         push @tags, 'expired-gpg-key' if is_sle('=15');
         while ($counter--) {
             die 'Registration repeated too much. Check if SCC is down.' if ($counter eq 1);
-            if (is_sle('15-SP4+')
+            if (is_sle('>=15-SP4')
                 && (get_var('VIDEOMODE', '') !~ /text|ssh-x/)
                 && (get_var("DESKTOP") !~ /textmode/)
                 && (get_var('REMOTE_CONTROLLER') !~ /vnc/)
                 && !(get_var('PUBLISH_HDD_1') || check_var('SLE_PRODUCT', 'hpc'))) {
-                record_soft_failure('bsc#1191112', 'Resizing window as workaround for YaST content not loading');
-                for (1 .. 2) { send_key 'alt-f10' }
+                apply_workaround_bsc1204176(\@tags, timeout => 360);
             }
             assert_screen(\@tags, timeout => 360);
             if (match_has_tag('import-untrusted-gpg-key')) {
@@ -693,7 +706,7 @@ sub select_addons_in_textmode {
     my ($addon, $flag) = @_;
     if ($flag) {
         send_key_until_needlematch 'scc-module-area-selected', 'tab';
-        send_key_until_needlematch ["scc-module-$addon", "scc-module-$addon-selected"], 'down', 30, 5;
+        send_key_until_needlematch ["scc-module-$addon", "scc-module-$addon-selected"], 'down', 31, 5;
         if (match_has_tag("scc-module-$addon")) {
             send_key 'spc';
             # After selected/deselected an addon, yast scc would automatically
@@ -802,6 +815,7 @@ sub get_addon_fullname {
         tcm => is_sle('15+') ? 'sle-module-development-tools' : 'sle-module-toolchain',
         wsm => 'sle-module-web-scripting',
         python2 => 'sle-module-python2',
+        python3 => 'sle-module-python3',
         phub => 'PackageHub',
         tsm => 'sle-module-transactional-server',
         espos => 'ESPOS',
@@ -993,7 +1007,6 @@ sub process_modules {
             set_var('SCC_ADDONS', $addons);
         }
     }
-
     # Process modules
     if (check_var('SCC_REGISTER', 'installation') || check_var('SCC_REGISTER', 'yast') || check_var('SCC_REGISTER', 'console')) {
         process_scc_register_addons;

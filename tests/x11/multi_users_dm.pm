@@ -58,7 +58,7 @@ sub run {
     }
     elsif (check_var('DESKTOP', 'xfce')) {
         # select created user #01
-        send_key_until_needlematch(['user-01-selected', 'user-freetext-input-selected'], 'down', 1, 3);
+        send_key_until_needlematch(['user-01-selected', 'user-freetext-input-selected'], 'down', 2, 3);
         if (match_has_tag 'user-freetext-input-selected') {
             enter_cmd "$user";
         }
@@ -89,6 +89,8 @@ sub run {
     assert_script_run "~$username/data/delete_users $users_to_create";
     script_run "clear";
     assert_script_run "rcxdm restart";
+    # Wait for gdm to be started before selecting x11-console
+    wait_still_screen 10;
     select_console 'x11';
     # after restart of X11 give the desktop a bit more time to show up to
     # prevent the post_run_hook to fail being too impatient

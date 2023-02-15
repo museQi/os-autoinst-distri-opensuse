@@ -11,6 +11,10 @@ conditional_schedule:
   bootmenu:
     ARCH:
       aarch64:
+  cpuid:
+    ARCH:
+      x86_64:
+        - hpc/cpuid
   hpctest:
     HPC:
       slurm_master:
@@ -43,6 +47,10 @@ conditional_schedule:
         - hpc/pdsh_master
       pdsh_slave:
         - hpc/pdsh_slave
+      dolly_master:
+        - hpc/dolly_master
+      dolly_slave:
+        - hpc/dolly_slave
       hpc_master:
         - hpc/hpc_master
         - hpc/hpc_migration
@@ -56,4 +64,5 @@ schedule:
   - '{{bootmenu}}'
   - boot/boot_to_desktop
   - hpc/before_test
+  - '{{cpuid}}'
   - '{{hpctest}}'

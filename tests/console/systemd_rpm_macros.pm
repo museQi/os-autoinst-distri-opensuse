@@ -7,12 +7,13 @@
 #          - call a list of macros to make sure they are available (list taken from manual testing report)
 #          - if Tumbleweed or SLE >= 15, also download sources and install multipath-tools to run some macros
 #
-# Maintainer: Michael Grifalconi <mgrifalconi@suse.com>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base 'consoletest';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils;
 use registration qw(add_suseconnect_product);
@@ -20,14 +21,13 @@ use registration qw(add_suseconnect_product);
 sub build_mt {
     zypper_call("in rpmbuild");
     zypper_call("si multipath-tools");
-    assert_script_run 'rpmbuild -bb /usr/src/packages/SPECS/multipath-tools.spec';
+    assert_script_run("rpmbuild -bb /usr/src/packages/SPECS/multipath-tools.spec", 180);
 }
 
 
 sub run {
     #Preparation
-    my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # Call macros to make sure they are available
     zypper_call("in systemd-rpm-macros");

@@ -16,24 +16,27 @@
 
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
-use utils qw(zypper_call script_retry);
+use serial_terminal 'select_serial_terminal';
+use utils qw(zypper_call script_retry script_output_retry);
 use version_utils qw(is_sle);
 use mmapi 'get_current_job_id';
 use registration qw(add_suseconnect_product get_addon_fullname);
 use containers::k8s;
+use publiccloud::utils qw(gcloud_install);
 
 sub run {
     my ($self, $run_args) = @_;
+    my $job_id = get_current_job_id();
 
     # We either test various cloud clusters or local k3s
     my $k8s_backend = shift(@{$run_args->{backends}});
+
     record_info("K8s engine", $k8s_backend);
 
     my $is_k3s = $k8s_backend eq 'K3S';
     $self->{is_k3s} = $is_k3s;
 
-    $self->select_serial_terminal;
-    $self->{deployment_name} = "apache-" . get_current_job_id();
+    select_serial_terminal;
     my $chart = "bitnami/apache";
 
     record_info("Chart name", $chart);
@@ -47,25 +50,30 @@ sub run {
         my $provider;
 
         # Configure the public cloud kubernetes
-        if ($k8s_backend eq "EKS") {
+        if ($k8s_backend eq "EC2") {
             add_suseconnect_product(get_addon_fullname('pcm')) if is_sle;
-            zypper_call("in jq aws-cli");
+            zypper_call("in jq aws-cli", timeout => 300);
 
-            $provider = publiccloud::eks->new(
-                region => get_var('PUBLIC_CLOUD_REGION', 'eu-central-1')
-            );
+            $provider = publiccloud::eks->new();
         }
-        elsif ($k8s_backend eq 'AKS') {
+        elsif ($k8s_backend eq 'AZURE') {
             add_suseconnect_product(get_addon_fullname('pcm'),
                 (is_sle('=12-sp5') ? '12' : undef));
             add_suseconnect_product(get_addon_fullname('phub'))
               if is_sle('=12-sp5');
-            zypper_call('in jq azure-cli');
+            zypper_call('in jq azure-cli', timeout => 300);
 
             $provider = publiccloud::aks->new();
         }
-        elsif ($k8s_backend eq 'GKE') {
-            die('GKE is not implemented yet');
+        elsif ($k8s_backend eq 'GCE') {
+            add_suseconnect_product(get_addon_fullname('pcm')) if is_sle;
+            gcloud_install();
+
+            # package needed by init():
+            my $pkg = is_sle('>=15') ? "in chrony" : "in ntp";
+            zypper_call($pkg, timeout => 300);
+
+            $provider = publiccloud::gke->new();
         }
         else {
             die('Unknown service given');
@@ -76,41 +84,43 @@ sub run {
 
     install_helm();
 
+    assert_script_run('curl --create-dir -vo ~/helm-test/Chart.yaml ' . data_url('containers/helm-test/') . 'Chart.yaml');
+    assert_script_run('curl --create-dir -vo ~/helm-test/values.yaml ' . data_url('containers/helm-test/') . 'values.yaml');
+    assert_script_run('curl --create-dir -vo ~/helm-test/templates/job.yaml ' . data_url('containers/helm-test/templates/') . 'job.yaml');
+    assert_script_run('curl --create-dir -vo ~/helm-test/templates/NOTES.txt ' . data_url('containers/helm-test/templates/') . 'NOTES.txt');
+
+    assert_script_run("kubectl create namespace helm-ns-$job_id");
+    assert_script_run("kubectl config set-context --current --namespace=helm-ns-$job_id");
+
+    assert_script_run("helm install helm-test-$job_id ~/helm-test/ --values ~/helm-test/values.yaml --set job_id=$job_id");
+    assert_script_run("helm list");
+
+    my $pod = script_output_retry('kubectl get pods -o name --no-headers=true | grep helm-test-$job_id', retry => 3, delay => 10);
+    script_retry("kubectl logs $pod | grep 'SUSE'", retry => 12, delay => 15);
+    assert_script_run("helm uninstall helm-test-$job_id");
+
+    assert_script_run("kubectl config set-context --current --namespace=default");
+    script_run("kubectl delete namespace helm-ns-$job_id");
+
     # Add repo, search and show values
     assert_script_run(
-        "helm repo add bitnami https://charts.bitnami.com/bitnami");
-    assert_script_run("helm repo update");
+        "helm repo add bitnami https://charts.bitnami.com/bitnami", 180);
+    assert_script_run("helm repo update", 180);
     assert_script_run("helm search repo apache");
     assert_script_run("helm show all $chart");
 
-    # Install apache
-    assert_script_run("helm install $self->{deployment_name} $chart");
-    assert_script_run("helm list");
-
-    # Wait for deployment
-    script_retry(
-        "kubectl rollout status deployment/$self->{deployment_name}",
-        delay => 30,
-        retry => 10
-    );
-    assert_script_run("kubectl describe deployment/$self->{deployment_name}");
-    assert_script_run("kubectl get pods | grep $self->{deployment_name}");
-    assert_script_run("kubectl describe services/$self->{deployment_name}");
-
-    # Test
-    my $port = int(rand(100)) + 10000;
-    enter_cmd(
-        "kubectl port-forward  services/$self->{deployment_name} $port:80 &");
-    script_retry("curl http://localhost:$port", delay => 30, retry => 5);
-
-    # Destroy the chart and k3s
-    assert_script_run("helm delete $self->{deployment_name}");
     uninstall_k3s() if $is_k3s;
 }
 
 sub post_fail_hook {
     my ($self) = @_;
-    script_run("helm delete $self->{deployment_name}");
+    my $job_id = get_current_job_id();
+
+    script_run("helm uninstall helm-test-$job_id");
+
+    script_run("kubectl config set-context --current --namespace=default");
+    script_run("kubectl delete namespace helm-ns-$job_id");
+
     uninstall_k3s() if $self->{is_k3s};
 }
 

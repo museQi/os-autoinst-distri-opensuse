@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: The class introduces methods that are common for all YaST modules.
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package YaST::Module;
 use strict;
@@ -42,12 +42,12 @@ sub open {
         );
     }
     elsif ($ui eq 'qt') {
-        launch_yast2_module_x11($module, extra_vars => get_var('YUI_PARAMS'));
+        launch_yast2_module_x11($module, extra_vars => get_var('YUI_PARAMS'), maximize_window => get_var('MAXIMIZE_WINDOW'));
     }
     else {
         die "Unknown user interface: $ui";
     }
-    YuiRestClient::get_app()->check_connection();
+    YuiRestClient::get_app()->check_connection(timeout => $args{timeout});
 }
 
 =head2 close

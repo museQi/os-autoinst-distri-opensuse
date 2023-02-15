@@ -18,8 +18,6 @@ use Mojo::Base 'publiccloud::k8s_provider';
 use testapi;
 use utils;
 
-has security_token => undef;
-
 sub init {
     my ($self, %args) = @_;
     $self->SUPER::init("ECR");
@@ -29,10 +27,11 @@ sub init {
 =head2 delete_image
 Delete a ECR image
 =cut
+
 sub delete_image {
     my ($self, $tag) = @_;
     assert_script_run(
-        "aws ecr batch-delete-image --repository-name " . $self->container_registry . " --image-ids imageTag=" . $tag);
+        "aws ecr batch-delete-image --repository-name " . $self->provider_client->container_registry . " --image-ids imageTag=" . $tag);
     return;
 }
 

@@ -44,7 +44,7 @@ sub install_podman_when_needed {
     my $host_os = shift;
     my @pkgs = qw(podman);
     if (script_run("which podman") != 0) {
-        if ($host_os eq 'centos') {
+        if ($host_os =~ /centos|rhel/) {
             script_retry "yum -y install @pkgs --nobest --allowerasing", timeout => 300;
         } elsif ($host_os eq 'ubuntu') {
             script_retry("apt-get -y install @pkgs", timeout => 300);
@@ -111,7 +111,7 @@ sub install_docker_when_needed {
         # Check for docker start timeout, bsc#1187479
         if (script_run('journalctl -e | grep "timeout waiting for containerd to start"') == 0) {
             # Retry one more time
-            record_soft_failure("bsc#1187479");
+            record_soft_failure("bsc#1187479 - docker start infrequently times out waiting for containerd");
             sleep(120);    # give background services time to complete to prevent another failure
             systemctl('start docker');
         } else {
@@ -231,12 +231,14 @@ sub test_search_registry {
 
     foreach my $rlink (@registries) {
         record_info("URL", "Scanning: $rlink");
-        my $res = script_run(sprintf(qq[set -o pipefail; %s search %s/busybox --format="{{.Name}}" |& tee ./out], $engine, $rlink));
+        my $res = script_run(sprintf(qq[set -o pipefail; %s search %s/busybox --format="{{.Name}}" |& tee ./out], $engine, $rlink), timeout => 200);
         if (script_run('grep "requested access to the resource is denied" ./out') == 0) {
             record_soft_failure("bsc#1178214 Podman search doesn't work with SUSE Registry");
             record_soft_failure("bsc#1198974 [sle15sp1,sle15sp2] podman search wrong return code") if ($res != 125);
         }
         die 'Unexpected error during search!' if ($res && $res != 125);
+        # This should be conditional based on the needed time, but that's currently not possible.
+        record_soft_failure('Searching registry.suse.com is too slow (sdsc#SD-106252 https://sd.suse.com/servicedesk/customer/portal/1/SD-106252)');
     }
 }
 
@@ -254,7 +256,7 @@ sub test_container_image {
     # Images from custom registry are listed with the '$registry/library/'
     $image =~ s/^docker\.io\/library\///;
 
-    my $smoketest = qq[/bin/sh -c '/bin/uname -r; /bin/echo "Heartbeat from $image"; ps'];
+    my $smoketest = qq[/bin/sh -c '/bin/uname -r; /bin/echo "Heartbeat from $image"'];
 
     $runtime->pull($image, timeout => 420);
     $runtime->check_image_in_host($image);
@@ -306,7 +308,7 @@ sub check_containers_connectivity {
     my $container_name = 'sut_container';
 
     # Run container in the background (sleep for 30d because infinite is not supported by sleep in busybox)
-    assert_script_run "$runtime pull " . registry_url('alpine');
+    script_retry "$runtime pull " . registry_url('alpine'), retry => 3, delay => 120;
     assert_script_run "$runtime run -id --rm --name $container_name -p 1234:1234 " . registry_url('alpine') . " sleep 30d";
     my $container_ip = container_ip $container_name, $runtime;
 

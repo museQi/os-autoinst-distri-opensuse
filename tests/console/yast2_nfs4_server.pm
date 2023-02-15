@@ -23,6 +23,7 @@ use warnings;
 use utils qw(clear_console zypper_call systemctl);
 use version_utils;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use lockapi;
 use mmapi;
 use mm_network;
@@ -30,9 +31,10 @@ use nfs_common;
 
 sub run {
     my ($self) = @_;
+    select_serial_terminal;
+
     my $rw = '/srv/nfs';
     my $ro = '/srv/nfs/ro';
-    select_console 'root-console';
 
     server_configure_network($self);
 
@@ -42,6 +44,9 @@ sub run {
     try_nfsv2();
 
     prepare_exports($rw, $ro);
+
+    # We need needles from now
+    select_console 'root-console';
 
     my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'nfs-server');
 
@@ -65,6 +70,7 @@ sub run {
 
     # Back on the console, test mount locally
     clear_console;
+    select_console 'root-console';
 
     # Server is up and running, client can use it now!
     script_run "( journalctl -fu nfs-server > /dev/$serialdev & )";

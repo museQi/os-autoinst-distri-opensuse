@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: Base module for AppArmor test cases
-# Maintainer: llzhao <llzhao@suse.com>
+# Maintainer: QE Security <none@suse.de>
 
 =head1 Apparmor Tests
 
@@ -15,7 +15,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_leap is_tumbleweed);
+use version_utils qw(is_sle is_leap is_tumbleweed is_alp);
 use y2_module_guitest 'launch_yast2_module_x11';
 use x11utils 'turn_off_gnome_screensaver';
 
@@ -107,6 +107,7 @@ sub aa_tmp_prof_prepare {
 Verify that program can start with temporary profiles and then restore to the enforce status with normal profiles
 
 =cut
+
 sub aa_tmp_prof_verify {
     my ($self, $prof_dir_tmp, $prog) = @_;
 
@@ -127,6 +128,7 @@ sub aa_tmp_prof_verify {
 Remove appamor temporary profiles
 
 =cut
+
 sub aa_tmp_prof_clean {
     my ($self, $prof_dir_tmp) = @_;
 
@@ -142,6 +144,7 @@ sub aa_tmp_prof_clean {
 Get the named profile for an executable program
 
 =cut
+
 sub get_named_profile {
     my ($self, $profile_name) = @_;
 
@@ -158,6 +161,7 @@ sub get_named_profile {
 
 Check the output of aa-status: if a given profile belongs to a given mode
 =cut
+
 sub aa_status_stdout_check {
     my ($self, $profile_name, $profile_mode) = @_;
 
@@ -175,6 +179,7 @@ sub aa_status_stdout_check {
 Fetch ip details
 
 =cut
+
 sub ip_fetch {
     # "# hostname -i/-I" can not work in some cases
     my $ip = script_output("ip -4 -f inet -o a | grep -E \'eth0|ens\' | sed -n 's/\.*inet \\([0-9.]\\+\\)\.*/\\1/p'");
@@ -204,6 +209,7 @@ Set up mail server with Postfix and Dovecot:
 =back
 
 =cut
+
 sub setup_mail_server_postfix_dovecot {
     my ($self) = @_;
     my $ip = "";
@@ -513,7 +519,7 @@ Set up Web environment for running Adminer by:
 
 =over
 
-=item * use assert_script_run to enable php5 andphp7, restart apache2 and mysql
+=item * use assert_script_run to enable php7 or php8, restart apache2 and mysql
 
 =item * download Adminer and copy it to directory /srv/www/htdocs/adminer/
 
@@ -532,8 +538,11 @@ Set up Web environment for running Adminer by:
 =cut
 # Set up Web environment for running Adminer
 sub adminer_setup {
-    assert_script_run("a2enmod php5");
-    assert_script_run("a2enmod php7");
+    if (is_sle(">=15-SP4") || is_leap(">15.4") || is_tumbleweed() || is_alp()) {
+        assert_script_run("a2enmod php8");
+    } else {
+        assert_script_run("a2enmod php7");
+    }
     assert_script_run("systemctl restart apache2");
     assert_script_run("systemctl restart mysql");
 
@@ -560,7 +569,7 @@ sub adminer_setup {
         check_screen([qw(adminer-login unresponsive-script)], timeout => 300);    # nocheck: old code, should be updated
     }
     if (match_has_tag("unresponsive-script")) {
-        send_key_until_needlematch("adminer-login", 'ret', 5, 5);
+        send_key_until_needlematch("adminer-login", 'ret', 6, 5);
     }
     elsif (match_has_tag("adminer-login")) {
         record_info("Firefox is loading adminer", "adminer login page shows up");
@@ -577,16 +586,16 @@ sub adminer_setup {
     $ret = check_screen("quit-and-close-tabs", timeout => 30);
     if (defined($ret)) {
         # Click the "quit and close tabs" button
-        send_key_until_needlematch("close-button-selected", 'tab', 5, 5);
+        send_key_until_needlematch("close-button-selected", 'tab', 6, 5);
         send_key "ret";
     }
     wait_still_screen(stilltime => 3, timeout => 30);
     # Exit xterm
     if (is_tumbleweed()) {
-        send_key_until_needlematch("generic-desktop", 'alt-f4', 5, 5);
+        send_key_until_needlematch("generic-desktop", 'alt-f4', 6, 5);
     }
     # Send "ret" key in case of any pop up message
-    send_key_until_needlematch("generic-desktop", 'ret', 5, 5);
+    send_key_until_needlematch("generic-desktop", 'ret', 6, 5);
     select_console("root-console");
     send_key "ctrl-c";
     clear_console;
@@ -625,7 +634,7 @@ sub adminer_database_delete {
     assert_and_click("adminer-click-database-test");
     assert_and_click("adminer-click-drop-database-test");
     # Confirm drop
-    send_key_until_needlematch("adminer-database-dropped", 'ret', 10, 1);
+    send_key_until_needlematch("adminer-database-dropped", 'ret', 11, 1);
     # Exit x11 and turn to console
     send_key "alt-f4";
     # Handle exceptions when "Quit and close tabs" in Firefox, the warning FYI:
@@ -754,6 +763,7 @@ sub create_log_content_is_special {
 Upload mail warn, err and info logs for reference
 
 =cut
+
 sub upload_logs_mail {
     # Upload mail warn, err and info logs for reference
     if (script_run("! [[ -e $mail_err_log ]]")) {
@@ -774,6 +784,7 @@ sub upload_logs_mail {
 Restart auditd and apparmor in root-console
 
 =cut
+
 sub pre_run_hook {
     my ($self) = @_;
 
@@ -790,9 +801,11 @@ sub pre_run_hook {
 Run post_fail_hook and upload audit logs
 
 =cut
+
 sub post_fail_hook {
     my ($self) = shift;
 
+    return if get_var('NOLOGS');
     # Exit x11 and turn to console in case
     send_key("alt-f4");
     select_console("root-console");

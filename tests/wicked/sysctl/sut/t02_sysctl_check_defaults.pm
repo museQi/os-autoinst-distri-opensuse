@@ -12,6 +12,7 @@
 
 use Mojo::Base 'wickedbase';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use List::Util qw(uniq);
 use Mojo::File qw(path);
 
@@ -40,7 +41,7 @@ sub get_diff {
 
 sub run {
     my ($self, $ctx) = @_;
-    $self->select_serial_terminal();
+    select_serial_terminal();
 
     return if $self->skip_by_wicked_version('>=0.6.68');
 
@@ -77,7 +78,8 @@ EOT
     script_run('systemctl disable --now wickedd', die_on_timeout => 1);
     $self->reboot();
 
-    assert_script_run('ip link add type dummy');
+    assert_script_run('modprobe dummy numdummies=0');
+    assert_script_run('ip link add dummy0 type dummy');
     my $out_native = script_output($cmd);
 
     $self->record_console_test_result("Sysctl Native", $out_native, result => 'ok');

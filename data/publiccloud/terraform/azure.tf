@@ -35,6 +35,14 @@ variable "image_id" {
     default = ""
 }
 
+variable "image_uri" {
+	default = ""
+}
+
+variable "publisher" {
+	default="SUSE"
+}
+
 variable "offer" {
     default=""
 }
@@ -56,7 +64,11 @@ variable "create-extra-disk" {
 }
 
 variable "storage-account" {
-    default="openqa"
+    # Note: Don't delete the default value!!!
+    # Not all of our `terraform destroy` calls pass this variable and neither is it necessary.
+    # However removing the default value might cause `terraform destroy` to fail in corner cases,
+    # resulting effectively in leaking resources due to failed cleanups.
+    default="eisleqaopenqa"
 }
 
 variable "tags" {
@@ -147,12 +159,13 @@ resource "azurerm_image" "image" {
     name                      = "${azurerm_resource_group.openqa-group.name}-disk1"
     location                  = var.region
     resource_group_name       = azurerm_resource_group.openqa-group.name
+    hyper_v_generation        = var.sku == "gen1" ? "V1" : "V2"
     count = var.image_id != "" ? 1 : 0
 
     os_disk {
         os_type = "Linux"
         os_state = "Generalized"
-        blob_uri = "https://openqa.blob.core.windows.net/sle-images/${var.image_id}"
+        blob_uri = "https://${var.storage-account}.blob.core.windows.net/sle-images/${var.image_id}"
         size_gb = 30
     }
 }
@@ -190,11 +203,11 @@ resource "azurerm_linux_virtual_machine" "openqa-vm" {
     # disk_size_gb         = 30
   }
 
-  source_image_id =  var.image_id != "" ? azurerm_image.image.0.id : null
+  source_image_id = var.image_uri != "" ? var.image_uri : (var.image_id != "" ? azurerm_image.image.0.id : null)
   dynamic "source_image_reference" {
-    for_each = range(var.image_id != "" ? 0 : 1)
+    for_each = range(var.image_id == "" && var.image_uri == "" ? 1 : 0)
     content {
-      publisher = var.image_id != "" ? "" : "SUSE"
+      publisher = var.image_id != "" ? "" : var.publisher
       offer     = var.image_id != "" ? "" : var.offer
       sku       = var.image_id != "" ? "" : var.sku
       version   = var.image_id != "" ? "" : "latest"

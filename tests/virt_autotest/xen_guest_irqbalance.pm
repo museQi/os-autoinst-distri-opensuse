@@ -14,8 +14,7 @@ use utils 'script_retry';
 use version_utils qw(is_sle);
 use set_config_as_glue;
 use virt_autotest::common;
-use virt_autotest::utils qw(is_kvm_host guest_is_sle wait_guest_online print_cmd_output_to_file);
-use virt_utils qw(upload_virt_logs remove_vm restore_downloaded_guests);
+use virt_autotest::utils qw(is_kvm_host guest_is_sle wait_guest_online download_script_and_execute remove_vm save_original_guest_xmls restore_downloaded_guests restore_original_guests upload_virt_logs);
 
 our $vm_xml_save_dir = "/tmp/download_vm_xml";
 
@@ -28,8 +27,6 @@ sub run_test {
 
     foreach my $guest (keys %virt_autotest::common::guests) {
 
-        #irqbalance test run on sle12sp3+ guest
-        next if guest_is_sle($guest, '<=12-sp2');
         if (guest_is_sle($guest, '=15-sp0')) {
             record_soft_failure("Skip the test as fix for SLE15 was not requested by customer in bsc#1178477.");
             next;
@@ -59,20 +56,21 @@ sub run_test {
 
         # Check if the SMP affinities are distributed among CPUs
         my @affinities_with_irqbalance = get_irq_affinities_from_guest($guest, @nic_irqs_id);
-        # for SLE15SP3 and prior, IRQs are distributed on one cpu core ramdomly.
+        # for SLE15SP3 guest and prior, IRQs are assigned on one cpu core ramdomly.
+        # this is also the case for SLE15SP4 guest on SLE15SP1 host
         # So it is correct if some of them may happen to run on cpu0
         # but it would not be correct if all IRQs were bound to cpu0.
-        if (guest_is_sle($guest, '<=15-sp3')) {
+        if (guest_is_sle($guest, '<=15-sp3') or is_sle('=15-sp1')) {
             my $multiply = 1;
             $multiply *= $_ foreach (@affinities_with_irqbalance);
             die "SMP affinities were all bound to CPU0 with irqbalance.service enabled" if $multiply == 1;
         }
-        # for SLE15SP4 (or newer release), IRQs are specified on all CPU cores
+        # for SLE15SP4 (or newer release), except on SLE15SP1 host, IRQs are specified on all CPU cores
         # fg. affinity value is '0xf' for machine with 4 CPU cores
         else {
             my $default_affinity = script_output("ssh root\@$guest \"cat /proc/irq/default_smp_affinity\"");
             foreach (@affinities_with_irqbalance) {
-                die "The NIC IRQs did not follow the default_smp_affinity with irqbalance enabled." if $_ ne $default_affinity;
+                record_info('Softfail', "The value of one NIC IRQ smp_affinity, '$_', did not follow the default_smp_affinity, '$default_affinity', with irqbalance enabled.", result => 'softfail') if $_ ne $default_affinity;
             }
         }
 
@@ -91,7 +89,7 @@ sub run_test {
             #at least a few interrupts on each cpu core
             if ($increased_irqs_on_cpu[$cpu_id] < 10) {
                 #Please look into the soft failure to identify if it is a product bug or temporary lack of network load coverage
-                record_soft_failure("IRQ are not balanced as the vif interrupts for CPU" . $cpu_id . " is " . $increased_irqs_on_cpu[$cpu_id]);
+                record_info('Softfail', "IRQ are not balanced as the vif interrupts for CPU" . $cpu_id . " is " . $increased_irqs_on_cpu[$cpu_id], result => 'softfail');
             }
         }
         record_info("NIC IRQs distribution on $nproc cpu cores", "@increased_irqs_on_cpu");
@@ -103,28 +101,11 @@ sub run_test {
 
 #save the guest configuration files into a folder
 sub save_original_guests {
-    assert_script_run "mkdir -p $vm_xml_save_dir" unless script_run("ls $vm_xml_save_dir") == 0;
+    my $vm_xml_save_dir = "/tmp/download_vm_xml";
+    save_original_guest_xmls($vm_xml_save_dir);
     my $changed_xml_dir = "$vm_xml_save_dir/changed_xml";
     script_run("[ -d $changed_xml_dir ] && rm -rf $changed_xml_dir/*");
     script_run("mkdir -p $changed_xml_dir");
-    foreach my $guest (keys %virt_autotest::common::guests) {
-        unless (script_run("ls $vm_xml_save_dir/$guest.xml") == 0) {
-            assert_script_run "virsh dumpxml --inactive $guest > $vm_xml_save_dir/$guest.xml";
-        }
-    }
-}
-
-#restore guest from the configuration files in a folder
-sub restore_original_guests {
-    foreach my $guest (keys %virt_autotest::common::guests) {
-        remove_vm($guest);
-        if (script_run("ls $vm_xml_save_dir/$guest.xml") == 0) {
-            restore_downloaded_guests($guest, $vm_xml_save_dir);
-        }
-        else {
-            record_soft_failure "Fail to restore $guest!";
-        }
-    }
 }
 
 #restore guest which xml configuration files were changed in prepare_guest_for_irqbalance()
@@ -134,6 +115,7 @@ sub restore_xml_changed_guests {
     foreach my $guest (@changed_guests) {
         remove_vm($guest);
         restore_downloaded_guests($guest, $changed_xml_dir);
+        assert_script_run "virsh start $guest";
     }
 }
 
@@ -210,16 +192,11 @@ sub post_fail_hook {
 
     diag("Module xen_guest_irqbalance post fail hook starts.");
     my $log_dir = "/tmp/irqbalance";
+    script_run("[ -d $log_dir ] && rm -rf $log_dir/*; mkdir -p $log_dir");
     foreach my $guest (keys %virt_autotest::common::guests) {
         my $log_file = $log_dir . "/$guest" . "_irqbalance_debug";
-        script_run("[ -d $log_dir ] && rm -rf $log_dir/*");
-        script_run("mkdir -p $log_dir && touch $log_file");
-        print_cmd_output_to_file("rpm -q irqbalance", $log_file, $guest);
-        print_cmd_output_to_file("systemctl status irqbalance", $log_file, $guest);
-        print_cmd_output_to_file("grep -e vif -e eth /proc/interrupts", $log_file, $guest);
-        print_cmd_output_to_file("cat /proc/irq/default_smp_affinity", $log_file, $guest);
-        print_cmd_output_to_file("cat /proc/irq/*/smp_affinity", $log_file, $guest);
-        #skip post the output of 'irqbalance --debug' because it takes too long(more than 15 minutes)
+        my $debug_script = "xen_irqbalance_guest_logging.sh";
+        download_script_and_execute($debug_script, machine => $guest, output_file => $log_file);
     }
     upload_virt_logs($log_dir, "irqbalance_debug");
     $self->SUPER::post_fail_hook;

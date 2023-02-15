@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright 2009-2013 Bernhard M. Wiedemann
-# Copyright 2012-2021 SUSE LLC
+# Copyright 2012-2022 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: yast2-bootloader
@@ -10,13 +10,15 @@
 #    Make sure those yast2 modules can opened properly. We can add more
 #    feature test against each module later, it is ensure it will not crashed
 #    while launching atm.
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "y2_module_guitest";
 use strict;
 use warnings;
 use testapi;
 use utils 'type_string_slow_extended';
+use version_utils 'is_sle';
+use YaST::workarounds;
 
 sub run {
     select_console 'x11';
@@ -45,9 +47,13 @@ sub run {
     type_string '16';
 
     #	default boot section
-    assert_and_click 'yast2-bootloader_default-boot-section';
-    assert_screen 'yast2-bootloader_default-boot-section_tw';
-    send_key 'esc';    # Close drop down
+    if (is_sle('>=15-SP4')) {
+        apply_workaround_bsc1204176('yast2-bootloader_default-boot-section') if (is_sle('>=15-SP4'));
+        assert_and_click 'yast2-bootloader_default-boot-section';
+    }
+    else {
+        assert_screen 'yast2-bootloader_default-boot-section_tw';
+    }
 
     #	proctect boot loader with password
     assert_and_click 'yast2-bootloader_protect-bootloader-with-password';

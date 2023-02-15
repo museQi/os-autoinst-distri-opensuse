@@ -17,6 +17,7 @@ vars:
 schedule:
   - installation/bootloader_start
   - installation/setup_libyui
+  - installation/access_beta_distribution
   - installation/product_selection/install_SLES
   - installation/licensing/accept_license
   - installation/registration/skip_registration
@@ -27,7 +28,7 @@ schedule:
   - installation/clock_and_timezone/accept_timezone_configuration
   - installation/authentication/use_same_password_for_root
   - installation/authentication/default_user_simple_pwd
-  - installation/select_patterns
+  - installation/select_visible_patterns_from_bottom
   - installation/installation_settings/validate_default_target
   - installation/bootloader_settings/disable_boot_menu_timeout
   - installation/launch_installation
@@ -43,6 +44,11 @@ schedule:
   - shutdown/grub_set_bootargs
   - console/validate_installed_packages
   - console/validate_installed_patterns
-  - console/suseconnect_scc
+  - console/scc_cleanup_reregister
+  - console/install_packages_simple
+  - console/scc_deregistration
+  - console/firewalld_add_port
+  - console/setup_libyui_running_system
+  - x11/addon_products_via_SCC_yast2
   - shutdown/cleanup_before_shutdown
   - shutdown/shutdown

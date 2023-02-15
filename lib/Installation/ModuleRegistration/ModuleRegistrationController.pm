@@ -5,7 +5,7 @@
 
 # Summary: The class introduces business actions for Module Registration dialog.
 #
-# Maintainer: QE YaST <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package Installation::ModuleRegistration::ModuleRegistrationController;
 use strict;
@@ -37,9 +37,9 @@ sub register_module {
     $self->get_module_registration_page()->press_next();
 }
 
-sub register_modules {
+sub register_extension_and_modules {
     my ($self, $modules) = @_;
-    $self->get_module_registration_page()->register_modules($modules);
+    $self->get_module_registration_page()->register_extension_and_modules($modules);
     $self->get_module_registration_page()->press_next();
 }
 

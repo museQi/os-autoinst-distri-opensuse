@@ -45,7 +45,7 @@ sub run {
     send_key "g";
 
     # 2. Switch keymap from us to german
-    send_key_until_needlematch("yast2_keyboard-layout-german", "down");
+    send_key_until_needlematch("yast2_keyboard-layout-german", "down") unless check_screen("yast2_keyboard-layout-german", 30);
     wait_screen_change { send_key $accept_keybind };
     assert_screen "generic-desktop", timeout => 90;
 
@@ -60,8 +60,9 @@ sub run {
 
     # 4. simulate german keystrokes to switch back us keymap
     send_key "alt-f2";
-    type_string "xdg/su /c |&sbin&zast2 kezboard|";
-    send_key_until_needlematch('root-auth-dialog', 'ret', 3, 3);
+    assert_screen('desktop-runner');
+    type_string("xdg/su /c |&sbin&zast2 kezboard|");
+    send_key_until_needlematch('root-auth-dialog', 'ret', 4, 3);
     wait_still_screen 2;
     type_password;
     send_key("ret");
@@ -69,16 +70,14 @@ sub run {
     wait_still_screen 10;
     send_key "alt-k";
     wait_still_screen 2;
-    send_key "e";
-    send_key "n" if is_sle("15-SP2+");
-    send_key_until_needlematch("yast2_keyboard-layout-us", "down");
+    send_key_until_needlematch("yast2_keyboard-layout-us", "e");
     send_key $accept_keybind;
     assert_screen "generic-desktop", timeout => 90;
 
     # 5. Reproduce bug 1142559
     x11_start_program("xterm");
     enter_cmd "/sbin/yast2 keyboard";
-    if (check_screen("yast2-keyboard-ui", 5)) {
+    if (check_screen("yast2-keyboard-ui", 10)) {
         record_soft_failure "bsc#1142559, yast2 keyboard should not start as non root user";
         send_key "alt-c";
         wait_still_screen 2;

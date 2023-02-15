@@ -31,11 +31,17 @@ sub get_host_resolv_conf {
     while (my $line = <$fh>) {
         if ($line =~ /^nameserver\s+([0-9.]+)\s*$/) {
             $conf{nameserver} //= [];
+            diag('mm_network::get_host_resolv_conf nameserver ' . $1);
             push @{$conf{nameserver}}, $1;
         }
         if ($line =~ /search\s+(.+)\s*$/) {
+            diag('mm_network::get_host_resolv_conf search ' . $1);
             $conf{search} = $1;
         }
+    }
+    if (scalar @{$conf{nameserver}} == 0) {
+        # If we don't get the name server from openQA worker we try to use the worker IP address
+        push(@{$conf{nameserver}}, script_output("ip route show | awk '/default/ { print \$3 }'"));
     }
     close($fh);
     return \%conf;
@@ -60,9 +66,9 @@ sub configure_static_ip {
         my $nm_list = script_output("nmcli -t -f DEVICE,NAME c | grep '$device' | head -n1");
         ($device, $nm_id) = split(':', $nm_list);
 
-        record_info('set_ip', "Device: $device\n NM ID: $nm_id\nIP: $ip");
+        record_info('set_ip', "Device: $device\n NM ID: $nm_id\nIP: $ip\nMTU: $mtu");
 
-        assert_script_run "nmcli connection modify '$nm_id' ifname '$device' ip4 $ip ipv4.method manual ";
+        assert_script_run "nmcli connection modify '$nm_id' ifname '$device' ip4 $ip ipv4.method manual 802-3-ethernet.mtu $mtu";
     } else {
         # Get MAC address
         my $net_conf = parse_network_configuration();
@@ -231,6 +237,8 @@ sub restart_networking {
     if ($is_nm) {
         assert_script_run 'nmcli networking off';
         assert_script_run 'nmcli networking on';
+        # Wait until the connections are configured
+        assert_script_run 'nmcli networking connectivity check';
     } else {
         assert_script_run 'rcnetwork restart';
     }

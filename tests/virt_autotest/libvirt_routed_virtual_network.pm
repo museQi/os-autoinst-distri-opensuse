@@ -1,13 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright 2019-2020 SUSE LLC
+# Copyright 2019-2022 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: Routed virtual network test:
 #    - Create Routed virtual network
 #    - Confirm Routed virtual network
 #    - Destroy Routed virtual network
-# Maintainer: Leon Guo <xguo@suse.com>
+# Maintainer: Leon Guo <xguo@suse.com>, qe-virt@suse.de
 
 use base "virt_feature_test_base";
 use virt_utils;
@@ -48,11 +48,14 @@ sub run_test {
         #There will be two guests in two different routed networks so then the
         #host can route their traffic to confirm libvirt routed network
         assert_script_run("virsh dumpxml $guest > $guest.clone");
-        assert_script_run("virsh destroy $guest");
-        assert_script_run("virsh undefine $guest");
+        assert_script_run("virsh destroy $guest || (virsh list --state-shutoff | grep $guest)");
+        assert_script_run("virsh undefine $guest || virsh undefine $guest --keep-nvram");
         assert_script_run("virsh define $guest.clone");
         assert_script_run("rm -rf $guest.clone");
-        assert_script_run("virt-clone -o $guest -n $guest.clone -f /var/lib/libvirt/images/$guest.clone");
+        record_info "Clone a virtual machine from $guest";
+        #setup a timeout value to clone a given guest system,
+        #refer to poo#124107 for more details
+        assert_script_run("virt-clone -o $guest -n $guest.clone -f /var/lib/libvirt/images/$guest.clone", 360);
         assert_script_run("virsh start $guest");
         ensure_online $guest, skip_network => 1;
         assert_script_run("virsh start $guest.clone");
@@ -96,7 +99,7 @@ sub run_test {
 
         script_run "sed -i '/ $guest.clone /d' /etc/hosts";
         assert_script_run("virsh destroy $guest.clone");
-        assert_script_run("virsh undefine $guest.clone");
+        assert_script_run("virsh undefine $guest.clone || virsh undefine $guest.clone --keep-nvram");
         assert_script_run("rm -rf /var/lib/libvirt/images/$guest.clone");
     }
     #Destroy ROUTED NETWORK

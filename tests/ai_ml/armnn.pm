@@ -12,6 +12,7 @@ use strict;
 use warnings;
 use base "consoletest";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils 'is_tumbleweed';
 
@@ -60,7 +61,7 @@ sub armnn_onnx_test_prepare {
     assert_script_run('pushd armnn/models');
     assert_script_run('wget https://github.com/onnx/models/raw/main/vision/classification/mnist/model/mnist-8.tar.gz -O ~/data/ai_ml/models/mnist.tar.gz');
     assert_script_run("tar xzf ~/data/ai_ml/models/mnist.tar.gz");
-    assert_script_run("cp mnist/model.onnx ./mnist_onnx.onnx");
+    assert_script_run("cp model/model.onnx ./mnist_onnx.onnx");
     assert_script_run('wget https://s3.amazonaws.com/onnx-model-zoo/mobilenet/mobilenetv2-1.0/mobilenetv2-1.0.tar.gz -O ~/data/ai_ml/models/mobilenetv2-1.0.tar.gz');
     assert_script_run("tar xzf ~/data/ai_ml/models/mobilenetv2-1.0.tar.gz");
     assert_script_run("cp mobilenetv2-1.0/mobilenetv2-1.0.onnx ./");
@@ -77,10 +78,9 @@ sub armnn_onnx_test_run {
 }
 
 sub run {
-    my ($self) = @_;
     my $armnn_backends = get_var("ARMNN_BACKENDS");    # Comma-separated list of armnn backends to test explicitly. E.g "CpuAcc,GpuAcc"
 
-    $self->select_serial_terminal;
+    select_serial_terminal;
     zypper_call $armnn_backends =~ /GpuAcc/ ? 'in armnn-opencl' : 'in armnn';
     # Install arm-ml-examples-data as required for TF, ONNX and Caffe tests
     zypper_call 'in arm-ml-examples-data';

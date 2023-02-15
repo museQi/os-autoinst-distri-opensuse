@@ -11,15 +11,15 @@
 
 use Mojo::Base qw(consoletest);
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(check_os_release get_os_release is_sle);
 use containers::common;
 
 sub run {
-    my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     my $interface;
-    my $update_timeout = 1200;
+    my $update_timeout = 2400;    # aarch64 takes sometimes 20-30 minutes for completion
     my ($version, $sp, $host_distri) = get_os_release;
     my $engine = get_required_var('CONTAINER_RUNTIME');
 
@@ -47,8 +47,8 @@ sub run {
     install_podman_when_needed($host_distri) if ($engine =~ 'podman');
 
     # It has been observed that after system update, the ip forwarding doesn't work.
-    # In Leap 15.3 there is a need to restart the firewall and docker daemon.
-    if ($host_distri eq 'opensuse-leap' && $version eq '15' && $sp eq '3') {
+    # In 15.3/15.4 there is a need to restart the firewall and docker daemon.
+    if ($host_distri =~ /sles|opensuse-leap/ && $version eq '15' && $sp =~ /3|4/) {
         systemctl("restart docker") if ($engine =~ 'docker');
         systemctl("restart firewalld");
     }

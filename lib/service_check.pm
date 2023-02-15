@@ -10,12 +10,13 @@ check service status or service function before and after migration
 # SPDX-License-Identifier: FSFAP
 
 # Summary: check service status before and after migration.
-# Maintainer: GAO WEI <wegao@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package service_check;
 
 use Exporter 'import';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use Utils::Architectures;
 use utils;
 use base 'opensusebasetest';
@@ -256,9 +257,10 @@ registered_addons, susefirewall, ntp, chrony, postfix, apache, dhcpd, bind, snmp
 Check service before migration, zypper install service package, enable, start and check service status
 
 =cut
+
 sub install_services {
     my ($service) = @_;
-    opensusebasetest::select_serial_terminal() if (get_var('SEL_SERIAL_CONSOLE'));
+    select_serial_terminal() if (get_var('SEL_SERIAL_CONSOLE'));
     # turn off lmod shell debug information
     assert_script_run('echo export LMOD_SH_DBG_ON=1 >> /etc/bash.bashrc.local');
     # turn off screen saver
@@ -327,6 +329,7 @@ sub install_services {
 check service status after migration
 
 =cut
+
 sub check_services {
     my ($service) = @_;
     foreach my $s (sort keys %$service) {
@@ -334,7 +337,7 @@ sub check_services {
         my $srv_proc_name = $service->{$s}->{srv_proc_name};
         my $support_ver = $service->{$s}->{support_ver};
         my $service_type = 'Systemd';
-        next unless (($service->{$s}->{before_migration} eq 'PASS') && _is_applicable($srv_pkg_name));
+        next if (defined($service->{$s}->{before_migration}) && ($service->{$s}->{before_migration} eq 'FAIL') || !_is_applicable($srv_pkg_name));
         record_info($srv_pkg_name, "service check after migration");
         eval {
             if (is_sle($support_ver, get_var('ORIGIN_SYSTEM_VERSION'))) {

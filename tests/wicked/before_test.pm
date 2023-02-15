@@ -11,6 +11,7 @@ use base 'wickedbase';
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call systemctl file_content_replace zypper_ar ensure_ca_certificates_suse_installed);
 use version_utils 'is_sle';
 use network_utils qw(iface setup_static_network);
@@ -23,7 +24,7 @@ use power_action_utils 'power_action';
 
 sub run {
     my ($self, $ctx) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     my @ifaces = split(' ', iface(2));
     my $need_reboot = 0;
     die("Missing at least one interface") unless (@ifaces);
@@ -42,6 +43,11 @@ sub run {
     }
     record_info('INFO', 'Setting debug level for wicked logs');
     file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
+    file_content_replace('/etc/systemd/journald.conf', '--debug' => 1,
+        # see: https://github.com/systemd/systemd/commit/f0367da7d1a61ad698a55d17b5c28ddce0dc265a
+        '^#?RateLimitInterval=.*' => 'RateLimitInterval=0',
+        '^#?RateLimitIntervalSec=.*' => 'RateLimitIntervalSec=0',
+        '^#?RateLimitBurst=.*' => 'RateLimitBurst=0');
     #preparing directories for holding config files
     assert_script_run('mkdir -p /data/{static_address,dynamic_address}');
 
@@ -115,12 +121,12 @@ sub run {
             zypper_call("in --from $repo_id $resolv_options --force -y --force-resolution  wicked wicked-service", log => 'zypper_in_wicked.log');
             my ($zypper_in_output) = script_output('cat /tmp/zypper_in_wicked.log');
             my @installed_packages;
-            for my $reg (('The following \d+ packages? (are|is) going to be upgraded:',
-                    'The following NEW packages? (are|is) going to be installed:',
-                    'The following \d+ packages? (are|is) going to be reinstalled:')) {
-                push(@installed_packages, split(/\s+/, $+{packages})) if ($zypper_in_output =~ m/(?s)($reg(?<packages>.*?))(?:\r*\n){2}/);
-            }
+            my $reg = 'The following (\d+|NEW) packages? (are|is) going to be (installed|reinstalled|upgraded|downgraded):';
+            push(@installed_packages, split(/\s+/, $+{packages})) if ($zypper_in_output =~ m/(?s)($reg(?<packages>.*?))(?:\r*\n){2}/);
             record_info('INSTALLED', join("\n", @installed_packages));
+            for my $pkg ('wicked', 'wicked-service') {
+                die("Missing installation of package $pkg!") unless grep { $_ eq $pkg } @installed_packages;
+            }
             my @zypper_ps_progs = split(/\s+/, script_output('zypper ps  --print "%s"', qr/^\s*$/));
             for my $ps_prog (@zypper_ps_progs) {
                 die("The following programm $ps_prog use deleted files") if grep { /$ps_prog/ } @installed_packages;
@@ -137,6 +143,13 @@ sub run {
             $repo_url = 'http://download.suse.de/ibs/home:/wicked-maintainers:/openQA/' if (is_sle());
             zypper_ar($repo_url . generate_version('_') . '/', name => 'wicked_maintainers', no_gpg_check => 1, priority => 60);
             $package_list .= ' ndisc6';
+        }
+        if (check_var('WICKED', 'startandstop')) {
+            # No firewalld on sles 12-SP5 (bsc#1180116)
+            if (is_sle('>12-SP5')) {
+                zypper_call('-q in firewalld', timeout => 400);
+                systemctl('disable --now firewalld');
+            }
         }
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
@@ -178,7 +191,7 @@ sub switch_to_wicked {
     systemctl("disable NetworkManager");
     power_action('reboot', textmode => 1);
     $self->wait_boot;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 }
 
 sub test_flags {

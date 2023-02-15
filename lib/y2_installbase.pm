@@ -12,12 +12,10 @@ use Utils::Architectures;
 
 use version_utils qw(is_microos is_sle);
 use y2_logs_helper 'get_available_compression';
-use utils qw(type_string_slow zypper_call);
+use utils qw(type_string_slow zypper_call remount_tmp_if_ro detect_bsc_1063638);
 use lockapi;
 use mmapi;
 use Test::Assert 'assert_equals';
-
-my $workaround_bsc1189550_done;
 
 =head1 y2_installbase
 
@@ -32,6 +30,7 @@ C<y2_installbase> - Base class for Yast installer related functionality
 After making changes in the "software selection" screen, accepts any 3rd party
 license.
 =cut
+
 sub accept3rdparty {
     my ($self) = @_;
     #Third party licenses sometimes appear
@@ -52,6 +51,7 @@ sub accept3rdparty {
 
 After making changes in the "pattern selection" screen, accepts changes.
 =cut
+
 sub accept_changes {
     my ($self) = @_;
     if (check_var('VIDEOMODE', 'text')) {
@@ -72,6 +72,7 @@ The function compares the actual systemd target with the expected one
 
 C<$expected_target> - systemd target that is expected and need to be validated.
 =cut
+
 sub validate_default_target {
     my ($self, $expected_target) = @_;
     select_console 'install-shell';
@@ -94,6 +95,7 @@ sub validate_default_target {
 Being in the "search packages" screen, performs steps needed to go back to
 overview page accepting automatic changes changes and 3rd party licenses.
 =cut
+
 sub back_to_overview_from_packages {
     my ($self) = @_;
     wait_screen_change { send_key 'alt-a' };    # accept
@@ -109,6 +111,7 @@ sub back_to_overview_from_packages {
 
 Being in the "select pattern" screen, workaround a known bug of Yast using QT.
 =cut
+
 sub check12qtbug {
     if (check_screen('pattern-too-low', 5)) {
         assert_and_click('pattern-too-low', timeout => 1);
@@ -122,6 +125,7 @@ sub check12qtbug {
 Performs steps needed to go from the "installation overview" screen to the
 "pattern selection" screen.
 =cut
+
 sub go_to_patterns {
     my ($self) = @_;
     $self->deal_with_dependency_issues();
@@ -159,6 +163,7 @@ sub go_to_patterns {
 Performs steps needed to go from the "pattern selection" screen to
 "search packages" screen.
 =cut
+
 sub go_to_search_packages {
     my ($self) = @_;
     send_key 'alt-d';    # details button
@@ -174,10 +179,17 @@ sub go_to_search_packages {
 Being in the "select pattern" screen, performs steps needed to move the
 highlight cursor one item down.
 =cut
+
 sub move_down {
     my $ret = wait_screen_change { send_key 'down' };
-    workaround_bsc1189550() if (!$workaround_bsc1189550_done && is_sle('>=15-sp3'));
     last if (!$ret);    # down didn't change the screen, so exit here
+    if (is_sle('>=15-sp3')) {
+        # Sending 'down' twice, followed by 'up', scrolls to the intended item.
+        $ret = wait_screen_change { send_key 'down' };
+        # If screen did not change with the second down we are on the last item.
+        # In that case do not press up so that it remains selected.
+        wait_screen_change { send_key 'up' } if $ret;
+    }
     check12qtbug if check_var('VERSION', '12');
 }
 
@@ -191,6 +203,7 @@ Possible values for PATTERNS
   PATTERNS=all (to select all of them)
   PATTERNS=default,web,-x11,-gnome (to keep the default but add web and remove x11 and gnome)
 =cut
+
 sub process_patterns {
     my ($self) = @_;
     if (get_required_var('PATTERNS')) {
@@ -211,6 +224,7 @@ sub process_patterns {
 Being in the "search package" screen, performs steps needed to search for
 C<$package_name>
 =cut
+
 sub search_package {
     my ($self, $package_name) = @_;
     assert_and_click 'packages-search-field-selected';
@@ -227,6 +241,7 @@ sub search_package {
 Being in the "select pattern" screen, performs steps needed to select all
 available patterns.
 =cut
+
 sub select_all_patterns_by_menu {
     my ($self) = @_;
     # Ensure mouse on certain pattern then right click
@@ -244,12 +259,48 @@ sub select_all_patterns_by_menu {
     assert_screen 'inst-overview';
 }
 
+=head2 select_not_install_any_pattern 
+
+    select_not_install_any_pattern() 
+
+Being in the "select pattern" screen, performs steps to not install any
+patterns.
+=cut
+
+sub select_not_install_any_pattern {
+    my ($self) = @_;
+
+    # Ensure mouse on certain pattern then right click
+    assert_and_click("minimal-system", button => 'right');
+    assert_screen 'selection-menu';
+    # select action on all patterns
+    wait_screen_change { send_key 'a'; };
+    # confirm do not install
+    assert_and_click 'all-do-not-install';
+    save_screenshot;
+}
+
+=head2 select_visible_unselected_patterns
+
+    select_visible_unselected_patterns([@patterns])
+
+Being in the "select pattern" screen, performs steps to select visible
+patterns.
+=cut
+
+sub select_visible_unselected_patterns {
+    my ($self, $patterns) = @_;
+
+    assert_and_click("$_-pattern") for ($patterns->@*);
+}
+
 =head2 deselect_pattern
 
     deselect_pattern();
 
 Deselect patterns from already selected ones.
 =cut
+
 sub deselect_pattern {
     my ($self) = @_;
     my %patterns;    # set of patterns to be processed
@@ -275,6 +326,7 @@ You can pass
   PATTERNS=default,web,-x11,-gnome to keep the default but add web and remove
   x11 and gnome
 =cut
+
 sub select_specific_patterns_by_iteration {
     my %patterns;    # set of patterns to be processed
                      # fill with variable values
@@ -347,6 +399,7 @@ checkbox (C<$action>) of the pattern matching one of the given C<$needles>.
 Example
   switch_selection(action => 'select', needles => ['current-pattern-selected']);
 =cut
+
 sub switch_selection {
     my (%args) = @_;
     my $action = $args{action};
@@ -358,17 +411,21 @@ sub switch_selection {
     assert_screen $needles, 8;
 }
 
-=head2 toogle_package
+=head2 toggle_package
 
-    toogle_package($package_name, $operation);
+    toggle_package($package_name, $operation);
 
 Being in the "search package" screen, and showing a list of found packages,
-performs steps needed to toogle the checkbox of C<$package_name>.
+performs steps needed to toggle the checkbox of C<$package_name>.
 The C<$operation> can be '+' or 'minus'.
 =cut
-sub toogle_package {
+
+sub toggle_package {
     my ($self, $package_name, $operation) = @_;
-    send_key_until_needlematch "packages-$package_name-selected", 'down', 60;
+    # When coming from search_packages, the search might not be completed yet,
+    # give it some time.
+    check_screen "packages-$package_name-selected", 60;
+    send_key_until_needlematch "packages-$package_name-selected", 'down', 61;
     wait_screen_change { send_key "$operation" };
     wait_still_screen 2;
     save_screenshot;
@@ -559,9 +616,9 @@ sub post_fail_hook {
         # error pop-up and system will reboot, so log collection will fail (see poo#61052)
         $self->SUPER::post_fail_hook unless get_var('AUTOYAST');
         get_to_console;
-        $self->detect_bsc_1063638;
+        detect_bsc_1063638;
         $self->get_ip_address;
-        $self->remount_tmp_if_ro;
+        remount_tmp_if_ro;
         # Avoid collectin logs twice when investigate_yast2_failure() is inteded to hard-fail
         $self->save_upload_y2logs unless get_var('ASSERT_Y2LOGS');
         return if is_microos;
@@ -570,12 +627,6 @@ sub post_fail_hook {
         # Collect yast2 installer  strace and gbd debug output if is still running
         $self->save_strace_gdb_output;
     }
-}
-
-sub workaround_bsc1189550 {
-    wait_screen_change { send_key 'end' };
-    wait_screen_change { send_key 'home' };
-    $workaround_bsc1189550_done = 1;
 }
 
 # All steps in the installation are 'fatal'.

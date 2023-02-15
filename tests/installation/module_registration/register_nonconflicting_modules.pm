@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2022 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Register non-conflicting modules along with preselected modules
@@ -15,15 +15,15 @@
 # - Legacy Module
 # - Web and Scripting Module
 #
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'y2_installbase';
 use strict;
 use warnings;
 
 sub run {
-    $testapi::distri->get_module_registration()->register_modules(
-        [qw(containers desktop development legacy web)]);
+    $testapi::distri->get_module_registration()->register_extension_and_modules(
+        [qw(contm desktop sdk legacy script)]);
 }
 
 1;

@@ -18,6 +18,7 @@ use testapi;
 use lockapi;
 use isotovideo;
 use x11utils 'ensure_unlocked_desktop';
+use Utils::Logging 'export_logs';
 
 our @EXPORT = qw(
   $crm_mon_cmd
@@ -52,6 +53,7 @@ our @EXPORT = qw(
   check_cluster_state
   wait_until_resources_stopped
   wait_until_resources_started
+  wait_for_idle_cluster
   get_lun
   check_device_available
   set_lvm_config
@@ -639,7 +641,7 @@ sub check_cluster_state {
     $cmd->("$crm_mon_cmd | grep -i 'no inactive resources'") if is_sle '12-sp3+';
     $cmd->('crm_mon -1 | grep \'partition with quorum\'');
     # In older versions, node names in crm node list output are followed by ": normal". In newer ones by ": member"
-    $cmd->(q/crm_mon -s | grep "$(crm node list | egrep -c ': member|: normal') nodes online"/);
+    $cmd->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
     # As some options may be deprecated, test shouldn't die on 'crm_verify'
     if (get_var('HDDVERSION')) {
         script_run 'crm_verify -LV';
@@ -728,6 +730,30 @@ sub wait_until_resources_started {
 
         # script_run need to be defined to ensure a correct exit code
         _test_var_defined $ret;
+    }
+}
+
+=head2 wait_for_idle_cluster
+
+ wait_for_idle_cluster( [ timeout => $timeout ] );
+
+Use `cs_wait_for_idle` to wait until the cluster is idle before continuing the tests.
+Supply a timeout with the named argument B<timeout> (defaults to 120 seconds). This
+timeout is scaled by the factor specified in the B<TIMEOUT_SCALE> setting. Croaks on
+timeout.
+
+=cut
+
+sub wait_for_idle_cluster {
+    my %args = @_;
+    my $timeout = bmwqemu::scale_timeout($args{timeout} // 120);
+    my $outoftime = time() + $timeout;    # Current time plus timeout == time at which timeout will be reached
+    return if script_run 'rpm -q ClusterTools2';    # cs_wait_for_idle only present if ClusterTools2 is installed
+    while (1) {
+        my $out = script_output 'cs_wait_for_idle --sleep 5', $timeout;
+        last if ($out =~ /Cluster state: S_IDLE/);
+        sleep 5;
+        die "Cluster was not idle for $timeout seconds" if (time() >= $outoftime);
     }
 }
 
@@ -898,7 +924,7 @@ sub post_fail_hook {
 
     # Try to save logs as a last resort
     ha_export_logs;
-    $self->export_logs;
+    export_logs;
 }
 
 sub test_flags {
@@ -950,6 +976,7 @@ or calculated:
 "corosync_token + corosync_consensus + SBD_WATCHDOG_TIMEOUT * 2"
 Variables 'corosync_token' and 'corosync_consensus' are converted to seconds.
 =cut
+
 sub calculate_sbd_start_delay {
     my %params;
     my $default_wait = 35 * get_var('TIMEOUT_SCALE', 1);

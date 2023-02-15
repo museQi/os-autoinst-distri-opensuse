@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: FSFAP
 # Summary: Package for ssh service tests
 #
-# Maintainer: QE YaST <qa-sle-yast@suse.de>, Huajian Luo <hluo@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package services::sshd;
 use base 'opensusebasetest';
@@ -23,8 +23,8 @@ my $ssh_testman_passwd = get_var('PUBLIC_CLOUD') ? random_string(8) : 'let3me2in
 my $changepwd = $ssh_testman . ":" . $ssh_testman_passwd;
 
 sub check_sshd_port {
-    assert_script_run q(ss -pnl4 | egrep 'tcp.*LISTEN.*:22.*sshd');
-    assert_script_run q(ss -pnl6 | egrep 'tcp.*LISTEN.*:22.*sshd');
+    assert_script_run q(ss -pnl4 | grep -E 'tcp.*LISTEN.*:22.*sshd');
+    assert_script_run q(ss -pnl6 | grep -E 'tcp.*LISTEN.*:22.*sshd');
 }
 
 sub check_sshd_service {
@@ -44,6 +44,11 @@ sub prepare_test_data {
 
     # Allow password authentication for $ssh_testman
     assert_script_run(qq(echo -e "Match User $ssh_testman\\n\\tPasswordAuthentication yes" >> /etc/ssh/sshd_config)) if (get_var('PUBLIC_CLOUD'));
+
+    if (script_run('rpm -q busybox-psmisc') == 0) {
+        record_soft_failure("boo#1198137 - busybox-psmisc preferred by zypper");
+        zypper_call("in psmisc -busybox-psmisc");
+    }
 
     # Install software needed for this test module
     zypper_call("in netcat-openbsd expect psmisc");
@@ -82,7 +87,7 @@ sub ssh_basic_check {
 
     # Check that we are really in the SSH session
     assert_script_run 'echo $SSH_TTY | grep "\/dev\/pts\/"';
-    assert_script_run 'ps ux | egrep ".* \? .* sshd\:"';
+    assert_script_run 'ps ux | grep -E ".* \? .* sshd\:"';
     assert_script_run "whoami | grep $ssh_testman";
     assert_script_run "mkdir .ssh";
 
@@ -105,18 +110,18 @@ sub ssh_basic_check {
     assert_script_run "echo 'sshd.pm: Testing port forwarding' | logger";
     background_script_run "ssh -vNL 4242:localhost:22 $ssh_testman\@localhost 2>/tmp/ssh_log1";
     background_script_run "ssh -vNR 0.0.0.0:5252:localhost:22 $ssh_testman\@localhost 2>/tmp/ssh_log2";
-    assert_script_run 'until ss -tulpn|grep sshd|egrep "4242|5252";do sleep 1;done';
+    assert_script_run 'until ss -tulpn|grep sshd|grep -E "4242|5252";do sleep 1;done';
 
     # Scan public keys on forwarded ports
     # Add a workaround about bsc#1193275 in FIPS test
     my $output_4242 = script_output("ssh-keyscan -p 4242 localhost >> ~/.ssh/known_hosts", proceed_on_failure => 1);
     if ($output_4242 =~ /choose_kex: unsupported KEX method curve25519-sha256/) {
-        record_soft_failure('bsc#1193275', "Currently the curve25519 is not FIPS approved");
+        record_info('bsc#1193275 - Currently the curve25519 is not FIPS approved');
     }
 
     my $output_5252 = script_output("ssh-keyscan -p 5252 localhost >> ~/.ssh/known_hosts", proceed_on_failure => 1);
     if ($output_5252 =~ /choose_kex: unsupported KEX method curve25519-sha256/) {
-        record_soft_failure('bsc#1193275', "Currently the curve25519 is not FIPS approved");
+        record_info('bsc#1193275 - Currently the curve25519 is not FIPS approved');
     }
 
     # Connect to forwarded ports

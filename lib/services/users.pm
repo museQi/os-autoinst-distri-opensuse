@@ -11,7 +11,7 @@
 #   3.Restore current user's password to ensure won't be block by later test.
 # After migration:
 #   4.Switch Bernhard and new user.
-# Maintainer: Lemon Li <leli@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 package services::users;
 use base "x11test";
@@ -34,7 +34,7 @@ our $pwd4newUser = "helloWORLD-0";
 sub lock_screen {
     assert_and_click "system-indicator";
     assert_and_click "lock-system";
-    send_key_until_needlematch 'gnome-screenlock-password', 'esc', 5, 10;
+    send_key_until_needlematch 'gnome-screenlock-password', 'esc', 6, 10;
     type_password "$newpwd\n";
     assert_screen "generic-desktop";
 }

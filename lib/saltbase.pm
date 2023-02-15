@@ -10,7 +10,7 @@ use warnings;
 use testapi;
 use known_bugs;
 
-use utils qw(zypper_call systemctl);
+use utils qw(zypper_call systemctl remount_tmp_if_ro);
 
 sub master_prepare {
     # Install the salt master
@@ -101,6 +101,7 @@ sub logs_from_salt {
 Method executed when run() finishes.
 
 =cut
+
 sub post_run_hook {
     my ($self) = @_;
 
@@ -122,8 +123,10 @@ sub post_run_hook {
 Method executed when run() finishes and the module has result => 'fail'
 
 =cut
+
 sub post_fail_hook {
     my ($self) = shift;
+    return if get_var('NOLOGS');
     select_console('log-console');
 
     # fetch Salt specific logs
@@ -133,8 +136,7 @@ sub post_fail_hook {
     stop();
 
     $self->SUPER::post_fail_hook;
-    $self->remount_tmp_if_ro;
-    $self->export_logs_basic;
+    remount_tmp_if_ro;
 }
 
 1;

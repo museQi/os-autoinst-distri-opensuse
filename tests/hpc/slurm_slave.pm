@@ -10,11 +10,13 @@
 
 use Mojo::Base 'hpcbase', -signatures;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use lockapi;
 use utils;
 use version_utils 'is_sle';
 
 sub run ($self) {
+    select_serial_terminal();
     $self->prepare_user_and_group();
 
     # Install slurm
@@ -48,7 +50,8 @@ sub test_flags ($self) {
 }
 
 sub post_fail_hook ($self) {
-    $self->select_serial_terminal;
+    $self->destroy_test_barriers();
+    select_serial_terminal;
     $self->upload_service_log('slurmd');
     $self->upload_service_log('munge');
 }

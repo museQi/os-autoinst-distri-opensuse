@@ -13,6 +13,7 @@ use warnings;
 use strict;
 use base 'opensusebasetest';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use klp;
 use power_action_utils 'power_action';
@@ -25,7 +26,7 @@ sub do_reboot {
     power_action('reboot', textmode => 1, keepconsole => is_pvm);
     reconnect_mgmt_console if is_pvm;
     $self->wait_boot;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 }
 
 sub run {
@@ -47,7 +48,11 @@ sub run {
         die "Failed to parse 'uname -r' output: '$output'";
     }
 
-    install_klp_product() unless get_var('KGRAFT');
+    unless (get_var('KGRAFT')) {
+        zypper_call('ref');
+        install_klp_product();
+    }
+
     my $klp_pkg = find_installed_klp_pkg($kver, $kflavor);
     if (!$klp_pkg) {
         die "No installed kernel livepatch package for current kernel found";

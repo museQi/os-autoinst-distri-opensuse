@@ -16,10 +16,12 @@ use publiccloud::ec2;
 use publiccloud::azure;
 use publiccloud::gce;
 use publiccloud::openstack;
+use serial_terminal 'select_serial_terminal';
 
 sub run {
     my ($self) = @_;
-    $self->select_serial_terminal;
+    # Better use the root-console here so that the download progress can be monitored in openQA
+    select_serial_terminal();
 
     my $provider = $self->provider_factory();
 
@@ -31,14 +33,18 @@ sub run {
         return;
     }
 
-    # Download the given image. Check for 404 errors and make them better visible
-    my $cmd = "wget --no-check-certificate $img_url -O $img_name";
-    my $rc = script_run("$cmd 2>download.txt", timeout => 60 * 10);
+    # Download the given image via wget. Note that by default wget retries 20 times before giving up
+    my $cmd = "wget -q --server-response --no-check-certificate --retry-connrefused --retry-on-host-error $img_url -O $img_name";
+    # A generious timeout is required because downloading up to 30 GB (Azure images) can take more than an hour.
+    my $rc = script_run("(set -o pipefail && $cmd 2>&1 | tee download.txt)", timeout => 120 * 60);
     if ($rc != 0) {
+        # Check for 404 errors and make them better visible
         upload_logs("download.txt");
-        script_run("cat download.txt");
-        die "404 - Image not found" if (script_run("grep '404' download.txt") == 0);
-        die "command '$cmd' failed with rc=$rc";
+        # The log contains mostly the download progress bar. Crop the last 10 lines for better visibility
+        my $output = script_output("tail -n 10 download.txt");
+        record_info("wget failed with status code $rc", "$cmd\n\n$output");
+        die "404 - Image not found" if ($output =~ "ERROR 404: Not Found");
+        die "wget failed with return code $rc";
     }
     $provider->upload_img($img_name);
 }
@@ -65,20 +71,6 @@ The type of the CSP (e.g. AZURE, EC2, GOOGLE)
 The URL where the image gets downloaded from. The name of the image gets extracted
 from this URL.
 
-=head2 PUBLIC_CLOUD_KEY_ID
-
-The CSP credentials key-id to used to access API.
-
-=head2 PUBLIC_CLOUD_KEY_SECRET
-
-The CSP credentials secret used to access API.
-
 =head2 PUBLIC_CLOUD_REGION
 
-The region to use. (default-azure: westeurope, default-ec2: eu-central-1, default-gcp: europe-west1)
-
-=head2 PUBLIC_CLOUD_AZURE_TENANT_ID
-
-This is B<only for azure> and used to create the service account file.
-
-=cut
+The region to use. (default-azure: westeurope, default-ec2: eu-central-1, default-gcp: europe-west1-b)

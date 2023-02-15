@@ -1,10 +1,10 @@
 # SUSE's openQA tests
 #
-# Copyright 2020 SUSE LLC
+# Copyright 2020-2022 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: virtualization test utilities.
-# Maintainer: Julie CAO <jcao@suse.com>
+# Maintainer: Julie CAO <jcao@suse.com>, qe-virt@suse.de
 
 package virt_autotest::utils;
 
@@ -21,15 +21,16 @@ use DateTime;
 use NetAddr::IP;
 use Net::IP qw(:PROC);
 use File::Basename;
+use LWP::Simple 'head';
 use Utils::Architectures;
 use IO::Socket::INET;
 use Carp;
 
-our @EXPORT = qw(is_vmware_virtualization is_hyperv_virtualization is_fv_guest is_pv_guest guest_is_sle is_guest_ballooned is_xen_host is_kvm_host
-  check_host check_guest print_cmd_output_to_file ssh_setup ssh_copy_id create_guest import_guest install_default_packages
-  upload_y2logs ensure_default_net_is_active ensure_guest_started ensure_online add_guest_to_hosts restart_libvirtd remove_additional_disks
-  remove_additional_nic collect_virt_system_logs shutdown_guests wait_guest_online start_guests is_guest_online wait_guests_shutdown
-  setup_common_ssh_config add_alias_in_ssh_config parse_subnet_address_ipv4 backup_file manage_system_service setup_rsyslog_host check_port_state);
+our @EXPORT = qw(is_vmware_virtualization is_hyperv_virtualization is_fv_guest is_pv_guest guest_is_sle is_guest_ballooned is_xen_host is_kvm_host check_failures_in_journal check_host_health check_guest_health
+  print_cmd_output_to_file ssh_setup ssh_copy_id create_guest import_guest install_default_packages upload_y2logs ensure_default_net_is_active ensure_guest_started
+  ensure_online add_guest_to_hosts restart_libvirtd remove_additional_disks remove_additional_nic collect_virt_system_logs shutdown_guests wait_guest_online start_guests restore_downloaded_guests save_original_guest_xmls restore_original_guests
+  is_guest_online wait_guests_shutdown remove_vm setup_common_ssh_config add_alias_in_ssh_config parse_subnet_address_ipv4 backup_file manage_system_service setup_rsyslog_host
+  check_port_state subscribe_extensions_and_modules download_script download_script_and_execute is_sev_es_guest upload_virt_logs recreate_guests);
 
 # helper function: Trim string
 sub trim {
@@ -39,7 +40,20 @@ sub trim {
 }
 
 sub restart_libvirtd {
-    is_sle '12+' ? systemctl "restart libvirtd", timeout => 180 : assert_script_run "service libvirtd restart", 180;
+    if (is_sle('<12')) {
+        assert_script_run('rclibvirtd restart', 180);
+    }
+    elsif (is_alp) {
+        my $_libvirtd_pid = script_output(q@ps -ef |grep [l]ibvirtd | gawk '{print $2;}'@);
+        my $_libvirtd_cmd = script_output("ps -o command $_libvirtd_pid | tail -1");
+        assert_script_run("kill -9 $_libvirtd_pid");
+        assert_script_run("$_libvirtd_cmd");
+    }
+    else {
+        systemctl("restart libvirtd", timeout => 180);
+    }
+    save_screenshot;
+    record_info("Debug log for libvirtd has been enabled!");
 }
 
 #return 1 if it is a VMware test judging by REGRESSION variable
@@ -104,23 +118,61 @@ sub is_xen_host {
     return get_var("XEN") || check_var("SYSTEM_ROLE", "xen") || check_var("HOST_HYPERVISOR", "xen") || check_var("REGRESSION", "xen-hypervisor");
 }
 
-#check host to make sure it works well
+#check kernels by grep keywords from journals
+#support x86_64 only
 #welcome everybody to extend this function
-sub check_host {
+sub check_failures_in_journal {
+    return unless is_x86_64;
+    my $machine = shift;
+    $machine //= 'localhost';
 
+    my $failures = "";
+    my @warnings = ('Started Process Core Dump', 'Call Trace');
+    foreach my $warn (@warnings) {
+        my $cmd = "journalctl | grep '$warn'";
+        $cmd = "ssh root\@$machine " . "\"$cmd\"" if $machine ne 'localhost';
+        $failures .= "\"$warn\" in journals on $machine \n" if script_run($cmd) == 0;
+    }
+    if ($failures) {
+        if (get_var('KNOWN_KERNEL_BUGS')) {
+            record_soft_failure("Found failures: \n" . $failures . "There are known kernel bugs " . get_var('KNOWN_KERNEL_BUGS') . ". Please analyze journal logs to double check if a new bug needs to be opened or it is an old issue. And please add new bugs to KNOWN_KERNEL_BUGS in the form of bsc#555555.");
+        }
+        else {
+            record_soft_failure("Found new failures: Fake bsc#5555(by PR rule)\n" . $failures . "This is an unknown failure which need to be investigated!");
+        }
+    }
+    return $failures;
 }
 
-#check guest to make sure it works well
-#welcome everybody to extend this function
-sub check_guest {
+# Do some basic check to host to see if it is working well
+# Support x86_64 only
+# Return 'pass' and 'fail' if there are or are not failures.
+# Welcome everybody to extend this function
+sub check_host_health {
+    return unless is_x86_64 and (is_sle or is_opensuse);
+    my $failures = check_failures_in_journal;
+    unless ($failures) {
+        record_info("Healthy host!");
+        return 'pass';
+    }
+    record_info("Unhealthy host", $failures, result => 'fail');
+    return 'fail';
+}
+
+# Do some basic check to specified guest tto see if it is working well
+# Return 'pass' and 'fail' if there are or are not failures.
+# Support x86_64 only
+# Welcome everybody to extend this function
+sub check_guest_health {
     my $vm = shift;
+    return unless is_x86_64 and ($vm =~ /sle|alp/i);
 
     #check if guest is still alive
     validate_script_output "virsh domstate $vm", sub { /running/ };
-
-    #TODO: other checks like checking journals from guest
-    #need check the oops bug
-
+    my $failures = check_failures_in_journal($vm);
+    return 'fail' if $failures;
+    record_info("Healthy guest!", "$vm looks good so far!");
+    return 'pass';
 }
 
 #ammend the output of the command to an existing log file
@@ -136,15 +188,54 @@ sub print_cmd_output_to_file {
     script_run "$cmd >> $file";
 }
 
+sub download_script_and_execute {
+    my ($script_name, %args) = @_;
+    $args{output_file} //= "$args{script_name}.log";
+    $args{machine} //= 'localhost';
+
+    download_script($script_name, script_url => $args{script_url}, machine => $args{machine});
+    my $cmd = "~/$script_name";
+    $cmd = "ssh root\@$args{machine} " . "\"$cmd\"" if ($args{machine} ne 'localhost');
+    script_run("$cmd >> $args{output_file} 2>&1");
+}
+
+sub download_script {
+    my ($script_name, %args) = @_;
+    my $script_url = $args{script_url} // data_url("virt_autotest/$script_name");
+    my $machine = $args{machine} // 'localhost';
+
+    my $cmd = "curl -s -o ~/$script_name $script_url";
+    $cmd = "ssh root\@$machine " . "\"$cmd\"" if ($machine ne 'localhost');
+    unless (script_retry($cmd, retry => 2, die => 0) == 0) {
+        # Add debug codes as the url only exists in a dynamic openqa URL
+        record_info("URL is not accessible", "$script_url", result => 'fail') unless head($script_url);
+        unless ($machine eq 'localhost') {
+            record_info("machine is not ssh accessible", "$machine", result => 'fail') unless script_run("ssh root\@$machine 'hostname'") == 0;
+            record_info("OSD is unaccessible from $machine", "that means the machine is having problem to access SUSE network", result => 'fail') unless script_run("ssh root\@$machine 'ping openqa.suse.de'") == 0;
+        }
+        die "Failed to download $script_url!";
+    }
+    $cmd = "chmod +x ~/$script_name";
+    $cmd = "ssh root\@$machine " . "\"$cmd\"" if ($machine ne 'localhost');
+    script_run($cmd);
+}
+
 sub ssh_setup {
-    my $default_ssh_key = (!(get_var('VIRT_AUTOTEST'))) ? "/root/.ssh/id_rsa" : "/var/testvirt.net/.ssh/id_rsa";
+    my $default_ssh_key = shift;
+
+    $default_ssh_key //= (!(get_var('VIRT_AUTOTEST'))) ? "/root/.ssh/id_rsa" : "/var/testvirt.net/.ssh/id_rsa";
     my $dt = DateTime->now;
     my $comment = "openqa-" . $dt->mdy . "-" . $dt->hms('-') . get_var('NAME');
     if (script_run("[[ -s $default_ssh_key ]]") != 0) {
         my $default_ssh_key_dir = dirname($default_ssh_key);
         script_run("mkdir -p $default_ssh_key_dir");
         assert_script_run "ssh-keygen -t rsa -P '' -C '$comment' -f $default_ssh_key";
+        record_info("Created ssh rsa key in $default_ssh_key successfully.");
+    } else {
+        record_info("Skip ssh rsa key recreation in $default_ssh_key, which exists.");
     }
+    assert_script_run("ls `dirname $default_ssh_key`");
+    save_screenshot;
 }
 
 sub ssh_copy_id {
@@ -154,7 +245,8 @@ sub ssh_copy_id {
     my $authorized_keys = $args{authorized_keys} // '.ssh/authorized_keys';
     my $scp = $args{scp} // 0;
     my $mode = is_sle('=11-sp4') ? '' : '-f';
-    my $default_ssh_key = (!(get_var('VIRT_AUTOTEST'))) ? "/root/.ssh/id_rsa.pub" : "/var/testvirt.net/.ssh/id_rsa.pub";
+    my $default_ssh_key = $args{default_ssh_key};
+    $default_ssh_key //= (!(get_var('VIRT_AUTOTEST'))) ? "/root/.ssh/id_rsa.pub" : "/var/testvirt.net/.ssh/id_rsa.pub";
     script_retry "nmap $guest -PN -p ssh | grep open", delay => 15, retry => 12;
     assert_script_run "ssh-keyscan $guest >> ~/.ssh/known_hosts";
     if (script_run("ssh -o PreferredAuthentications=publickey -o ControlMaster=no $username\@$guest hostname") != 0) {
@@ -179,6 +271,7 @@ sub ssh_copy_id {
 
 sub create_guest {
     my ($guest, $method) = @_;
+    my $v_type = $guest->{name} =~ /HVM/ ? "-v" : "";
 
     my $name = $guest->{name};
     my $location = $guest->{location};
@@ -187,7 +280,8 @@ sub create_guest {
     my $on_reboot = $guest->{on_reboot} // "restart";    # configurable on_reboot policy
     my $extra_params = $guest->{extra_params} // "";    # extra-parameters
     my $memory = $guest->{memory} // "2048";
-    my $maxmemory = $guest->{maxmemory} // $memory + 256;    # use by default just a bit more, so that we don't waste memory but still use the functionality
+    # poo#11786, set maxmemory bigger
+    my $maxmemory = $guest->{maxmemory} // $memory + 1536;    # use by default just a bit more, so that we don't waste memory but still use the functionality
     my $vcpus = $guest->{vcpus} // "2";
     my $maxvcpus = $guest->{maxvcpus} // $vcpus + 1;    # same as for memory, test functionality but don't waste resources
     my $extra_args = get_var("VIRTINSTALL_EXTRA_ARGS", "") . " " . get_var("VIRTINSTALL_EXTRA_ARGS_" . uc($name), "");
@@ -199,17 +293,12 @@ sub create_guest {
 
         # Run unattended installation for selected guest
         my ($autoyastURL, $diskformat, $virtinstall);
-        $autoyastURL = data_url($autoyast);
+        $autoyastURL = $autoyast;
         $diskformat = get_var("VIRT_QEMU_DISK_FORMAT") // "qcow2";
-
-        assert_script_run "qemu-img create -f $diskformat /var/lib/libvirt/images/xen/$name.$diskformat 20G", 180;
-        assert_script_run "sync", 180;
-        script_run "qemu-img info /var/lib/libvirt/images/xen/$name.$diskformat";
-
         $extra_args = "$linuxrc autoyast=$autoyastURL $extra_args";
         $extra_args = trim($extra_args);
-        $virtinstall = "virt-install $extra_params --name $name --vcpus=$vcpus,maxvcpus=$maxvcpus --memory=$memory,maxmemory=$maxmemory --vnc";
-        $virtinstall .= " --disk /var/lib/libvirt/images/xen/$name.$diskformat --noautoconsole";
+        $virtinstall = "virt-install $v_type $guest->{osinfo} --name $name --vcpus=$vcpus,maxvcpus=$maxvcpus --memory=$memory,maxmemory=$maxmemory --vnc";
+        $virtinstall .= " --disk path=/var/lib/libvirt/images/$name.$diskformat,size=20,format=$diskformat --noautoconsole";
         $virtinstall .= " --network network=default,mac=$macaddress --autostart --location=$location --wait -1";
         $virtinstall .= " --events on_reboot=$on_reboot" unless ($on_reboot eq '');
         $virtinstall .= " --extra-args '$extra_args'" unless ($extra_args eq '');
@@ -266,14 +355,16 @@ sub install_default_packages {
 sub ensure_online {
     my ($guest, %args) = @_;
 
-    my $hypervisor = $args{HYPERVISOR} // "192.168.122.1";
-    my $dns_host = $args{DNS_TEST_HOST} // "suse.de";
+    my $hypervisor = $args{HYPERVISOR} // " ";
+    my $dns_host = $args{DNS_TEST_HOST} // "www.suse.com";
     my $skip_ssh = $args{skip_ssh} // 0;
     my $skip_network = $args{skip_network} // 0;
     my $skip_ping = $args{skip_ping} // 0;
     my $ping_delay = $args{ping_delay} // 15;
     my $ping_retry = $args{ping_retry} // 60;
     my $use_virsh = $args{use_virsh} // 1;
+
+    $hypervisor = get_var('VIRT_AUTOTEST') ? "192.168.123.1" : "192.168.122.1";
 
     # Ensure guest is running
     # Only xen/kvm support to reboot guest at the moment
@@ -290,7 +381,7 @@ sub ensure_online {
         }
         unless ($skip_ssh == 1) {
             # Wait for ssh to come up
-            die "$guest does not start ssh" if (script_retry("nmap $guest -PN -p ssh | grep open", delay => 15, retry => 12) != 0);
+            die "$guest does not start ssh" if (script_retry("nmap $guest -PN -p ssh | grep open", delay => 30, retry => 12, timeout => 360) != 0);
             die "$guest not ssh-reachable" if (script_run("ssh $guest uname") != 0);
             # Ensure default route is set
             if (script_run("ssh $guest ip r s | grep default") != 0) {
@@ -395,11 +486,23 @@ sub is_guest_online {
 }
 
 # wait_guest_online($guest, [$timeout]) waits until the given guests is online by probing for an open ssh port
+# If [$state_check] is not zero, guest state checking will be performed to ensure it is in running state and retry
 sub wait_guest_online {
     my $guest = shift;
     my $retries = shift // 300;
+    my $state_check = shift // 0;
     # Wait until guest is reachable via ssh
-    script_retry("nmap $guest -PN -p ssh | grep open", delay => 1, retry => $retries);
+    if (script_retry("nmap $guest -PN -p ssh | grep open", delay => 1, retry => $retries, die => 0) != 0) {
+        # Ensure guest is running
+        if (($state_check != 0) and (script_run("virsh list --name --state-running | grep $guest") != 0)) {
+            script_run("virsh destroy $guest");
+            assert_script_run("virsh start $guest");
+            script_retry("nmap $guest -PN -p ssh | grep open", delay => 1, retry => $retries);
+        }
+        else {
+            die "Guest $guest ssh service is not up and running";
+        }
+    }
 }
 
 # Shutdown all guests and wait until they are shutdown
@@ -417,10 +520,10 @@ sub wait_guests_shutdown {
     # Note: Domain-0 is for xen only, but it does not hurt to exclude this also in kvm runs.
     # Firstly wait for guest shutdown for a while, turn it off forcibly using "virsh destroy" if timed-out.
     # Then wait for guest shutdown again with default "die => 1".
-    if (script_retry("! virsh list | grep -v Domain-0 | grep running", delay => 1, retry => $retries, die => 0) ne '0') {
+    if (script_retry("! virsh list | grep -v Domain-0 | grep running", timeout => 60, delay => 1, retry => $retries, die => 0) != 0) {
         script_run("virsh destroy $_") foreach (keys %virt_autotest::common::guests);
     }
-    script_retry("! virsh list | grep -v Domain-0 | grep running", delay => 1, retry => $retries);
+    script_retry("! virsh list | grep -v Domain-0 | grep running", timeout => 60, delay => 1, retry => $retries);
 }
 
 # Start all guests and wait until they are online
@@ -583,6 +686,7 @@ without being passed value to dst_machine or dst_port.The subroutine will return
 return 0.
 
 =cut
+
 sub check_port_state {
     my ($dst_machine, $dst_port, $retries, $delay) = @_;
     $dst_machine //= "";
@@ -605,6 +709,152 @@ sub check_port_state {
     }
     record_info("Port $dst_port is not open", "The port $dst_port is not open on machine $dst_machine") if ($port_state == 0);
     return $port_state;
+}
+
+=head2 subscribe_extensions_and_modules
+
+  subscribe_extensions_and_modules(dst_machine => $machine, activate => 1/0, reg_exts => $exts)
+
+Any available extensions and modules listed out by SUSEConnect --list-extensions
+that do not require additional regcode can be subscribe directly by using command
+SUSEConnect -p [extension or module]. Subscription is to be performed on localhost
+by default if argument dst_machine is not given any other address, and successful
+access to dst_machine via ssh should be guaranteed in advance if dst_machine points 
+to a remote machine. Deactivation is also supported if argument activate is given 
+0 explicitly. Multiple extensions or modules can be passed in as a single string 
+separated by space to argument reg_exts to be subscribed one by one.
+
+=cut
+
+sub subscribe_extensions_and_modules {
+    my (%args) = @_;
+    $args{dst_machine} //= 'localhost';
+    $args{activate} //= 1;
+    $args{reg_exts} //= '';
+    croak('Nothing to be subscribed. Please pass something to argument reg_exts.') if ($args{reg_exts} eq '');
+
+    my $cmd = '';
+    $cmd = "SUSEConnect -l";
+    $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+    my $ret = script_run($cmd);
+    save_screenshot;
+    unless ($ret == 0) {
+        record_info("Base product not registered or no extensions/modules available.", script_output($cmd, proceed_on_failure => 1));
+        return $ret;
+    }
+
+    $ret = 0;
+    my @to_be_subscribed = split(/ /, $args{reg_exts});
+    foreach (@to_be_subscribed) {
+        $cmd = "-p " . "\$(SUSEConnect -l | grep -o \"\\b$_\\/.*\\/.*\\b\")";
+        $cmd = ($args{activate} != 0 ? "SUSEConnect " : "SUSEConnect -d ") . $cmd;
+        $cmd = "ssh root\@$args{dst_machine} " . "\'$cmd\'" if ($args{dst_machine} ne 'localhost');
+        $ret |= script_run($cmd, timeout => 120);
+        save_screenshot;
+    }
+    $cmd = "SUSEConnect --status-text";
+    $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+    record_info("Subscription status on $args{dst_machine}", script_output($cmd));
+    return $ret;
+}
+
+=head2 is_sev_es_guest
+
+  is_sev_es_guest($guest_name)
+
+Check whether a guest is sev-es, sev only or not sev/sev-es guest by searching
+whether sev-es or sev word is available in its name. The only argument for the
+subroutine is guest_name. It returns sev-es or sev if either is found in guest
+name, otherwise it returns 0.
+
+=cut
+
+sub is_sev_es_guest {
+    my ($guest_name) = @_;
+    $guest_name //= '';
+    croak('Arugment guest_name should not be empty') if ($guest_name eq '');
+
+    if ($guest_name =~ /(sev-es|sev)/img) {
+        record_info("$guest_name is $1 guest", "Guest $guest_name is a $1 enabled guest judging by its name.");
+        return $1;
+    } else {
+        record_info("$guest_name is not sev(es) guest", "Guest $guest_name is not a sev or sev-es enabled guest judging by its name.");
+        return 'notsev';
+    }
+}
+
+# remove a vm listed via 'virsh list'
+sub remove_vm {
+    my $vm = shift;
+    my $is_persistent_vm = script_output "virsh dominfo $vm | sed -n '/Persistent:/p' | awk '{print \$2}'";
+    my $vm_state = script_output "virsh domstate $vm";
+    if ($vm_state ne "shut off") {
+        assert_script_run("virsh destroy $vm", 30);
+    }
+    if ($is_persistent_vm eq "yes") {
+        assert_script_run("virsh undefine $vm || virsh undefine $vm --keep-nvram", 30);
+    }
+}
+
+#Start the guest from the downloaded vm xml and vm disk file
+sub restore_downloaded_guests {
+    my ($guest, $vm_xml_dir) = @_;
+    record_info("Guest restored", "$guest");
+    assert_script_run("virsh define $vm_xml_dir/$guest.xml", 30);
+}
+
+sub save_original_guest_xmls {
+    my ($save_dir, @guests) = @_;
+    $save_dir //= "/tmp/download_vm_xml";
+    @guests = keys %virt_autotest::common::guests unless @guests;
+    assert_script_run "mkdir -p $save_dir" unless script_run("ls $save_dir") == 0;
+    foreach my $guest (@guests) {
+        unless (script_run("ls $save_dir/$guest.xml") == 0) {
+            assert_script_run "virsh dumpxml --inactive $guest > $save_dir/$guest.xml";
+        }
+    }
+}
+
+sub restore_original_guests {
+    my ($save_dir, @guests) = @_;
+    $save_dir //= "/tmp/download_vm_xml";
+    @guests = keys %virt_autotest::common::guests if @guests == 0;
+    foreach my $guest (@guests) {
+        remove_vm($guest);
+        if (script_run("ls $save_dir/$guest.xml") == 0) {
+            restore_downloaded_guests($guest, $save_dir);
+            record_info "Guest $guest is restored.";
+        }
+        else {
+            record_info("Fail to restore guest!", "$guest", result => 'softfail');
+        }
+    }
+}
+
+sub upload_virt_logs {
+    my ($log_dir, $compressed_log_name) = @_;
+
+    my $full_compressed_log_name = "/tmp/$compressed_log_name.tar.gz";
+    script_run("tar -czf $full_compressed_log_name $log_dir; rm $log_dir -r", 60);
+    save_screenshot;
+    upload_logs "$full_compressed_log_name";
+    save_screenshot;
+}
+
+#recreate all defined guests
+sub recreate_guests {
+    my $based_guest_dir = shift;
+    return if get_var('INCIDENT_ID');    # QAM does not recreate guests every time
+    my $get_vm_hostnames = "virsh list  --all | grep -e sles -e opensuse -e alp -i | awk \'{print \$2}\'";
+    my $vm_hostnames = script_output($get_vm_hostnames, 30, type_command => 0, proceed_on_failure => 0);
+    my @vm_hostnames_array = split(/\n+/, $vm_hostnames);
+    foreach (@vm_hostnames_array)
+    {
+        script_run("virsh destroy $_");
+        script_run("virsh undefine $_ || virsh undefine $_ --keep-nvram");
+        script_run("virsh define /$based_guest_dir/$_.xml");
+        script_run("virsh start $_");
+    }
 }
 
 1;

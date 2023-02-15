@@ -12,6 +12,7 @@ use version 'is_lax';
 use Carp 'croak';
 use Utils::Backends;
 use Utils::Architectures;
+use SemVer;
 
 use constant {
     VERSION => [
@@ -21,6 +22,7 @@ use constant {
           is_microos
           is_leap_micro
           is_sle_micro
+          is_alp
           is_selfinstall
           is_gnome_next
           is_jeos
@@ -42,11 +44,14 @@ use constant {
           is_public_cloud
           is_openstack
           is_leap_migration
+          is_tunneled
           requires_role_selection
           check_version
           get_os_release
           check_os_release
           package_version_cmp
+          get_version_id
+          php_version
         )
     ],
     BACKEND => [
@@ -72,9 +77,6 @@ use constant {
           is_transactional
           is_livecd
           is_quarterly_iso
-          has_product_selection
-          has_license_on_welcome_screen
-          has_license_to_accept
           uses_qa_net_hardware
           has_test_issues
         )
@@ -100,14 +102,16 @@ our %EXPORT_TAGS = (
 
 Returns true if called on jeos
 =cut
+
 sub is_jeos {
-    return get_var('FLAVOR', '') =~ /^JeOS/;
+    return get_var('FLAVOR', '') =~ /JeOS/;
 }
 
 =head2 is_vmware
 
 Returns true if called on vmware
 =cut
+
 sub is_vmware {
     return check_var('VIRSH_VMM_FAMILY', 'vmware');
 }
@@ -116,6 +120,7 @@ sub is_vmware {
 
 Returns true if called on krypton or argon
 =cut
+
 sub is_krypton_argon {
     return get_var('FLAVOR', '') =~ /(Krypton|Argon)/;
 }
@@ -124,6 +129,7 @@ sub is_krypton_argon {
 
 Returns true if called on Gnome-Live
 =cut
+
 sub is_gnome_next {
     return get_var('FLAVOR', '') =~ /Gnome-Live/;
 }
@@ -132,6 +138,7 @@ sub is_gnome_next {
 
 Returns true if 'INSTALLCHECK' is set
 =cut
+
 sub is_installcheck {
     return get_var('INSTALLCHECK');
 }
@@ -140,6 +147,7 @@ sub is_installcheck {
 
 Returns true if called on a rescue system
 =cut
+
 sub is_rescuesystem {
     return get_var('RESCUESYSTEM');
 }
@@ -148,6 +156,7 @@ sub is_rescuesystem {
 
 Returns true if called on a virutalization server
 =cut
+
 sub is_virtualization_server {
     return get_var('SYSTEM_ROLE', '') =~ /(kvm|xen)/;
 }
@@ -156,6 +165,7 @@ sub is_virtualization_server {
 
 Returns true if executed on a live cd
 =cut
+
 sub is_livecd {
     return get_var("LIVECD");
 }
@@ -167,6 +177,7 @@ Query format: [= > < >= <=] version [+] (Example: <=12-sp3 =12-sp1 <4.0 >=15 3.0
 Check agains: product version to check against - probably get_var('VERSION')
 Regex format: checks query version format (Example: /\d{2}\.\d/)#
 =cut
+
 sub check_version {
     my $query = lc shift;
     my $pv = lc shift;
@@ -180,6 +191,12 @@ sub check_version {
         if (is_lax($pv) && is_lax($qv)) {
             $pv = version->declare($pv);
             $qv = version->declare($qv);
+        }
+        elsif (index($pv, "sp") == -1 && index($qv, "sp") == -1) {
+            eval {
+                $pv = SemVer->declare($pv);
+                $qv = SemVer->declare($qv);
+            }
         }
         return $pv ge $qv if $+{plus} || $+{op} eq '>=';
         return $pv le $qv if $+{op} eq '<=';
@@ -198,6 +215,7 @@ Media type: DVD (iso) or VMX (all disk images)
 Version: Tumbleweed | 15.2 (Leap)
 Flavor: DVD | MS-HyperV | XEN | KVM-and-Xen | ..
 =cut
+
 sub is_microos {
     my $filter = shift;
     my $distri = get_var('DISTRI');
@@ -231,6 +249,7 @@ sub is_microos {
 
 Check if distribution is openSUSE Leap Micro
 =cut
+
 sub is_leap_micro {
     my $query = shift;
     my $version = shift // get_var('VERSION');
@@ -246,6 +265,7 @@ sub is_leap_micro {
 
 Check if distribution is SUSE Linux Enterprise Micro
 =cut
+
 sub is_sle_micro {
     my $query = shift;
     my $version = shift // get_var('VERSION');
@@ -257,10 +277,27 @@ sub is_sle_micro {
     return check_version($query, $version, qr/\d{1,}\.\d/);
 }
 
+=head2 is_alp
+
+Check if distribution is ALP
+=cut
+
+sub is_alp {
+    my $query = shift;
+    my $version = shift // get_var('VERSION');
+
+    return 0 unless check_var('DISTRI', 'alp');
+    return 1 unless $query;
+
+    # Version check
+    return check_version($query, $version, qr/\d{1,}\.\d/);
+}
+
 =head2 is_selfinstall
 
 Check if SLEM is in flavor of self installable iso
 =cut
+
 sub is_selfinstall {
     return get_var('FLAVOR') =~ /selfinstall/i;
 }
@@ -269,6 +306,7 @@ sub is_selfinstall {
 
 Returns true if called on tumbleweed
 =cut
+
 sub is_tumbleweed {
     # Tumbleweed and its stagings
     return 0 unless check_var('DISTRI', 'opensuse');
@@ -282,6 +320,7 @@ sub is_tumbleweed {
 Check if distribution is Leap with optional filter for:
 Version: <=42.2 =15.0 >15.0 >=42.3 15.0+
 =cut
+
 sub is_leap {
     my $query = shift;
     my $version = get_var('VERSION', '');
@@ -307,10 +346,12 @@ sub is_leap {
 
 Returns true if called on opensuse
 =cut
+
 sub is_opensuse {
     return 1 if check_var('DISTRI', 'opensuse');
     return 1 if check_var('DISTRI', 'microos');
     return 1 if check_var('DISTRI', 'leap-micro');
+    return 1 if check_var('DISTRI', 'alp');
     return 0;
 }
 
@@ -319,6 +360,7 @@ sub is_opensuse {
 Check if distribution is SLE with optional filter for:
 Version: <=12-sp3 =12-sp1 >11-sp1 >=15 15+ (>=15 and 15+ are equivalent)
 =cut
+
 sub is_sle {
     my $query = shift;
     my $version = shift // get_var('VERSION');
@@ -334,8 +376,10 @@ sub is_sle {
 
 Returns true if called on a transactional server
 =cut
+
 sub is_transactional {
     return 1 if (is_microos || is_sle_micro || is_leap_micro);
+    return 1 if (is_alp && get_var('FLAVOR') !~ /NonTransactional/);
     return check_var('SYSTEM_ROLE', 'serverro') || get_var('TRANSACTIONAL_SERVER');
 }
 
@@ -343,6 +387,7 @@ sub is_transactional {
 
 Returns true if called in a migration scenario
 =cut
+
 sub is_sles4migration {
     return get_var('FLAVOR', '') =~ /Migration|migrated/ && check_var('SLE_PRODUCT', 'sles');
 }
@@ -351,6 +396,7 @@ sub is_sles4migration {
 
 Returns true if called in a SAP test
 =cut
+
 sub is_sles4sap {
     return get_var('FLAVOR', '') =~ /SAP/ || check_var('SLE_PRODUCT', 'sles4sap');
 }
@@ -359,6 +405,7 @@ sub is_sles4sap {
 
 Returns true if called in an SAP standard test
 =cut
+
 sub is_sles4sap_standard {
     return is_sles4sap && check_var('SLES4SAP_MODE', 'sles');
 }
@@ -367,6 +414,7 @@ sub is_sles4sap_standard {
 
 Returns true if called on a real time system
 =cut
+
 sub is_rt {
     return (check_var('SLE_PRODUCT', 'rt') || get_var('FLAVOR') =~ /rt/i);
 }
@@ -375,6 +423,7 @@ sub is_rt {
 
 Returns true if called in an HPC test
 =cut
+
 sub is_hpc {
     return check_var('SLE_PRODUCT', 'hpc');
 }
@@ -383,6 +432,7 @@ sub is_hpc {
 
 Returns true if called on a released build
 =cut
+
 sub is_released {
     return get_var('FLAVOR') =~ /Incidents|Updates|QR/;
 }
@@ -392,6 +442,7 @@ sub is_released {
 
 Returns true if called in staging
 =cut
+
 sub is_staging {
     return get_var('STAGING');
 }
@@ -400,6 +451,7 @@ sub is_staging {
 
 Returns true if storage_ng is used
 =cut
+
 sub is_storage_ng {
     return get_var('STORAGE_NG') || is_sle('15+');
 }
@@ -408,6 +460,7 @@ sub is_storage_ng {
 
 Returns true in upgrade scenarios
 =cut
+
 sub is_upgrade {
     return get_var('UPGRADE') || get_var('ONLINE_MIGRATION') || get_var('ZDUP') || get_var('AUTOUPGRADE') || get_var('LIVE_UPGRADE');
 }
@@ -416,6 +469,7 @@ sub is_upgrade {
 
 Returns true if called in SLES12 upgrade scenario
 =cut
+
 sub is_sle12_hdd_in_upgrade {
     return is_upgrade && is_sle('<15', get_var('HDDVERSION'));
 }
@@ -424,6 +478,7 @@ sub is_sle12_hdd_in_upgrade {
 
 Returns true if a desktop is installed
 =cut
+
 sub is_desktop_installed {
     return get_var("DESKTOP") !~ /textmode|minimalx/;
 }
@@ -432,6 +487,7 @@ sub is_desktop_installed {
 
 #TODO this should be documented
 =cut
+
 sub is_system_upgrading {
     # If PATCH=1, make sure patch action is finished
     return is_upgrade && (!get_var('PATCH') || (get_var('PATCH') && get_var('SYSTEM_PATCHED')));
@@ -441,6 +497,7 @@ sub is_system_upgrading {
 
 Returns if system is older than SLE or Leap 15
 =cut
+
 sub is_pre_15 {
     return (is_sle('<15') || is_leap('<15.0')) && !is_tumbleweed;
 }
@@ -449,6 +506,7 @@ sub is_pre_15 {
 
 Returns true if system is aarch64 with uefi and shall boot an hdd image
 =cut
+
 sub is_aarch64_uefi_boot_hdd {
     return get_var('MACHINE') =~ /aarch64/ && get_var('UEFI') && get_var('BOOT_HDD_IMAGE');
 }
@@ -457,6 +515,7 @@ sub is_aarch64_uefi_boot_hdd {
 
 Returns true if executed on a server pattern, SLES4SAP or SLES4MIGRATION
 =cut
+
 sub is_server {
     return 1 if is_sles4sap();
     return 1 if is_sles4migration();
@@ -471,6 +530,7 @@ sub is_server {
 
 Returns true if INSTALL_TO_OTHERS is not set
 =cut
+
 sub install_this_version {
     return !check_var('INSTALL_TO_OTHERS', 1);
 }
@@ -480,6 +540,7 @@ sub install_this_version {
 Check the real version of the test machine is at least some value, rather than the VERSION variable
 It is for version checking for tests with variable "INSTALL_TO_OTHERS".
 =cut
+
 sub install_to_other_at_least {
     my $version = shift;
 
@@ -508,6 +569,7 @@ SLE 15 SP1:
     * RT Product has only one (minimal) role.
 On microos, leap 15.1+, TW we have it instead of desktop selection screen
 =cut
+
 sub is_using_system_role {
     return is_sle('>=12-SP2') && is_sle('<15')
       && is_x86_64
@@ -525,6 +587,7 @@ sub is_using_system_role {
 
 On leap 15.0 we have desktop selection first, and everywhere, where we have system roles
 =cut
+
 sub is_using_system_role_first_flow {
     return is_leap('=15.0') || is_using_system_role;
 }
@@ -533,6 +596,7 @@ sub is_using_system_role_first_flow {
 
 If there is only one role, there is no selection offered
 =cut
+
 sub requires_role_selection {
     # Applies to Krypton and Argon based on Leap 15.1+
     return !is_krypton_argon;
@@ -555,6 +619,7 @@ on SLE 15+, zVM preparation test shouldn't show Product Selection screen.
 Returns true (1) if Product Selection step has to be shown for the certain
 configuration, otherwise returns false (0).
 =cut
+
 sub has_product_selection {
     # Product selection behavior changed for s390 on 15-SP4, so now there's only a single product
     # and there's no need for the installer to request anything, however for QU this might change
@@ -578,6 +643,7 @@ Returns true (1) if License Agreement has to be shown on Welcome screen for the 
 configuration, otherwise returns false (0).
 
 =cut
+
 sub has_license_on_welcome_screen {
     return 1 if is_sle_micro;
     if (get_var('HASLICENSE')) {
@@ -596,6 +662,7 @@ sub has_license_on_welcome_screen {
 
 Returns true if the system has a license that needs to be accepted
 =cut
+
 sub has_license_to_accept {
     return has_license_on_welcome_screen || has_product_selection;
 }
@@ -604,6 +671,7 @@ sub has_license_to_accept {
 
 Returns true if the SUT uses qa net hardware
 =cut
+
 sub uses_qa_net_hardware {
     return !check_var("IPXE", "1") && is_ipmi || check_var("BACKEND", "generalhw");
 }
@@ -618,6 +686,7 @@ At the same time, connection method to the entity in which the file reside shoul
 firt argument go_to_target, for example, "ssh root at name or ip address" or "way to download the file"
 For use only on locahost, no argument needs to be specified
 =cut
+
 sub get_os_release {
     my ($go_to_target, $os_release_file) = @_;
     $go_to_target //= '';
@@ -654,6 +723,7 @@ Default to I</etc/os-release>.
 Returns 1 (true) if the ID_LIKE variable contains C<distri_name>.
 
 =cut
+
 sub check_os_release {
     my ($distri_name, $line, $go_to_target, $os_release_file) = @_;
     die '$distri_name is not given' unless $distri_name;
@@ -687,8 +757,18 @@ sub is_openstack {
 
 Returns true if called in a leap to sle migration scenario
 =cut
+
 sub is_leap_migration {
     return is_upgrade && get_var('ORIGIN_SYSTEM_VERSION') =~ /leap/;
+}
+
+=head2 is_tunneled
+
+Returns true if TUNNELED is set to 1
+=cut
+
+sub is_tunneled {
+    return get_var('TUNNELED', 0);
 }
 
 =head2 has_test_issues
@@ -758,6 +838,49 @@ sub package_version_cmp {
 
 Returns true if called in quaterly iso testing
 =cut
+
 sub is_quarterly_iso {
     return 1 if get_var('FLAVOR', '') =~ /QR/;
 }
+
+=head2 get_version_id
+
+  get_version_id(dst_machine => 'machine')
+
+Get SLES version from VERSION_ID in /etc/os-release. This subroutine also supports
+performing query on remote machine if dst_machine is given specific ip address or
+fqdn text of the remote machine. The default location that contains VERSION_ID is
+file /etc/os-release if nothing else is passed in to argument verid_file.
+
+=cut
+
+sub get_version_id {
+    my (%args) = @_;
+    $args{dst_machine} //= 'localhost';
+    $args{verid_file} //= '/etc/os-release';
+
+    my $cmd = "cat $args{verid_file} | grep VERSION_ID | grep -Eo \"[[:digit:]]{1,}\\.[[:digit:]]{1,}\"";
+    $cmd = "ssh root\@$args{dst_machine} " . "$cmd" if ($args{dst_machine} ne 'localhost');
+    return script_output($cmd);
+}
+
+sub php_version {
+    my ($php, $php_pkg, $php_ver);
+    if (is_sle('<15')) {
+        $php = 'php';
+        $php_pkg = 'php5';
+        $php_ver = '5';
+    }
+    elsif (is_leap("<15.4") || is_sle("<15-SP4")) {
+        $php = 'php7';
+        $php_pkg = 'php7';
+        $php_ver = '7';
+    }
+    else {
+        $php = 'php8';
+        $php_pkg = 'php8';
+        $php_ver = '8';
+    }
+    ($php, $php_pkg, $php_ver);
+}
+

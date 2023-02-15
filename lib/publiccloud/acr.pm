@@ -17,11 +17,7 @@ use Mojo::Base 'publiccloud::k8s_provider';
 use testapi;
 use utils;
 
-has security_token => undef;
-has key_id => undef;
-has key_secret => undef;
 has subscription => undef;
-has tenantid => undef;
 
 sub init {
     my ($self, %args) = @_;
@@ -32,6 +28,7 @@ sub init {
 =head2 delete_image
 Delete a ACR image
 =cut
+
 sub delete_image {
     my ($self, $tag) = @_;
     $tag //= $self->get_default_tag();

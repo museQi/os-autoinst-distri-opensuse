@@ -11,7 +11,9 @@ package publiccloud::provider;
 use testapi qw(is_serial_terminal :DEFAULT);
 use Mojo::Base -base;
 use publiccloud::instance;
-use publiccloud::utils 'is_azure';
+use publiccloud::instances;
+use publiccloud::ssh_interactive 'select_host_console';
+use publiccloud::utils qw(is_azure is_ec2);
 use Carp;
 use List::Util qw(max);
 use Data::Dumper;
@@ -19,7 +21,7 @@ use Mojo::JSON qw(decode_json encode_json);
 use utils qw(file_content_replace script_retry);
 use mmapi;
 
-use constant TERRAFORM_DIR => '/root/terraform';
+use constant TERRAFORM_DIR => get_var('PUBLIC_CLOUD_TERRAFORM_DIR', '/root/terraform');
 use constant TERRAFORM_TIMEOUT => 30 * 60;
 
 has prefix => 'openqa';
@@ -28,13 +30,12 @@ has terraform_applied => 0;
 has resource_name => sub { get_var('PUBLIC_CLOUD_RESOURCE_NAME', 'openqa-vm') };
 has provider_client => undef;
 
+has ssh_key => '/root/.ssh/id_rsa';
+
 =head1 METHODS
 
-=head2 init
-
-Needs provider specific credentials, e.g. key_id, key_secret, region.
-
 =cut
+
 sub init {
     my ($self) = @_;
     $self->create_ssh_key();
@@ -45,6 +46,7 @@ sub init {
 Does the conversion between C<PUBLIC_CLOUD_PROVIDER> and Terraform providers name.
 
 =cut
+
 sub conv_openqa_tf_name {
     # Check https://github.com/SUSE/ha-sap-terraform-deployments/issues/177 for more information
     my $cloud_provider = lc get_var('PUBLIC_CLOUD_PROVIDER');
@@ -58,6 +60,7 @@ sub conv_openqa_tf_name {
 Retrieves the image-id by given image C<name>.
 
 =cut
+
 sub find_img {
     die('find_image() isn\'t implemented');
 }
@@ -73,6 +76,7 @@ on GCE at the momment.
 Retrieves the image-id after upload or die.
 
 =cut
+
 sub upload_image {
     die('find_image() isn\'t implemented');
 }
@@ -95,6 +99,7 @@ Call img-proof tool and retrieves a hashref as result. Do not die if img-proof c
   };
 
 =cut
+
 sub img_proof {
     die('img_proof() isn\'t implemented');
 }
@@ -104,6 +109,7 @@ sub img_proof {
 Parse the output from img-proof command and retrieves instance-id, ip and logfile names.
 
 =cut
+
 sub parse_img_proof_output {
     my ($self, $output) = @_;
     my $ret = {};
@@ -146,6 +152,7 @@ sub parse_img_proof_output {
 Creates an ssh keypair in a given file path by $args{ssh_private_key_file}
 
 =cut
+
 sub create_ssh_key {
     my ($self, %args) = @_;
     $args{ssh_private_key_file} //= '/root/.ssh/id_rsa';
@@ -160,6 +167,7 @@ sub create_ssh_key {
 called by childs within img-proof function
 
 =cut
+
 sub run_img_proof {
     my ($self, %args) = @_;
     die('Must provide an instance object') if (!$args{instance});
@@ -169,6 +177,9 @@ sub run_img_proof {
     $args{results_dir} //= 'img_proof_results';
     $args{distro} //= 'sles';
     $args{tests} =~ s/,/ /g;
+
+    my $exclude = $args{exclude} // '';
+    my $beta = $args{beta} // 0;
 
     my $version = script_output('img-proof --version', 300);
     record_info("img-proof version", $version);
@@ -181,12 +192,20 @@ sub run_img_proof {
     $cmd .= '--no-cleanup ';
     $cmd .= '--collect-vm-info ';
     $cmd .= '--service-account-file "' . $args{credentials_file} . '" ' if ($args{credentials_file});
-    $cmd .= "--access-key-id '" . $args{key_id} . "' " if ($args{key_id});
-    $cmd .= "--secret-access-key '" . $args{key_secret} . "' " if ($args{key_secret});
+    #TODO: this if is just dirty hack which needs to be replaced with something more sane ASAP.
+    $cmd .= '--access-key-id $AWS_ACCESS_KEY_ID --secret-access-key $AWS_SECRET_ACCESS_KEY ' if (is_ec2());
     $cmd .= "--ssh-key-name '" . $args{key_name} . "' " if ($args{key_name});
     $cmd .= '-u ' . $args{user} . ' ' if ($args{user});
-    $cmd .= '--ssh-private-key-file "' . $args{instance}->ssh_key . '" ';
+    $cmd .= '--ssh-private-key-file "' . $self->ssh_key . '" ';
     $cmd .= '--running-instance-id "' . ($args{running_instance_id} // $args{instance}->instance_id) . '" ';
+    $cmd .= "--beta " if ($beta);
+    if ($exclude) {
+        # Split exclusion tests by command and add them individually
+        for my $excl (split ',', $exclude) {
+            $excl =~ s/^\s+|\s+$//g;    # trim spaces
+            $cmd .= "--exclude $excl ";
+        }
+    }
 
     $cmd .= $args{tests};
     record_info("img-proof cmd", $cmd);
@@ -213,10 +232,14 @@ The given C<$img_url> is optional, if not present it retrieves from
 PUBLIC_CLOUD_IMAGE_LOCATION.
 If PUBLIC_CLOUD_IMAGE_ID is set, then this value will be used
 =cut
+
 sub get_image_id {
     my ($self, $img_url) = @_;
     my $predefined_id = get_var('PUBLIC_CLOUD_IMAGE_ID');
     return $predefined_id if ($predefined_id);
+    # If a URI is given, then no image ID should be determined
+    return '' if (get_var('PUBLIC_CLOUD_IMAGE_URI'));
+    # Determine image ID from image filename
     $img_url //= get_required_var('PUBLIC_CLOUD_IMAGE_LOCATION');
     my ($img_name) = $img_url =~ /([^\/]+)$/;
     $self->{image_cache} //= {};
@@ -225,6 +248,31 @@ sub get_image_id {
     die("Image $img_name is not available in the cloud provider") unless ($image_id);
     $self->{image_cache}->{$img_name} = $image_id;
     return $image_id;
+}
+
+=head2 get_image_uri
+
+Retrieves the CSP image uri if exists, otherwise exception is thrown.
+This is currently used specifically in Azure so the subroutine will die afterwards.
+=cut
+
+sub get_image_uri {
+    my ($self) = @_;
+    my $image_uri = get_var("PUBLIC_CLOUD_IMAGE_URI");
+    die 'The PUBLIC_CLOUD_IMAGE_URI variable makes sense only for Azure' if ($image_uri && !is_azure);
+    if ($image_uri =~ /^auto$/mi) {
+        my $definition = get_required_var('DISTRI') . '-' . get_required_var('FLAVOR') . '-' . get_required_var('VERSION');
+        my $version = $self->calc_img_version();    # PUBLIC_CLOUD_BUILD PUBLIC_CLOUD_BUILD_KIWI
+        my $subscriptions = $self->provider_client->subscription;
+        my $resource_group = $self->resource_group;
+        my $image_gallery = $self->image_gallery;
+        $image_uri = "/subscriptions/$subscriptions/resourceGroups/$resource_group/providers/";
+        $image_uri .= "Microsoft.Compute/galleries/$image_gallery/images/$definition/versions/$version";
+        record_info 'IMAGE_URI', "Calculated IMAGE_URI=$image_uri";
+    } else {
+        record_info 'IMAGE_URI', "Provided IMAGE_URI=$image_uri";
+    }
+    return $image_uri;
 }
 
 =head2 create_instance
@@ -237,6 +285,7 @@ C<instance_type> defines the flavor of the instance. If not specified, it will l
                      from PUBLIC_CLOUD_INSTANCE_TYPE.
 
 =cut
+
 sub create_instance {
     return (shift->create_instances(@_))[0];
 }
@@ -251,6 +300,7 @@ C<instance_type> defines the flavor of the instance. If not specified, it will l
                      from PUBLIC_CLOUD_INSTANCE_TYPE.
 
 =cut
+
 sub create_instances {
     my ($self, %args) = @_;
     $args{check_connectivity} //= 1;
@@ -277,6 +327,7 @@ The working directory is always the terraform directory, where the statefile
 and the *.tf is placed.
 
 =cut
+
 sub on_terraform_apply_timeout {
 }
 
@@ -290,6 +341,7 @@ The working directory is always the terraform directory, where the statefile
 and the *.tf is placed.
 
 =cut
+
 sub on_terraform_destroy_timeout {
 }
 
@@ -298,6 +350,7 @@ sub on_terraform_destroy_timeout {
 This method is used to initialize the terraform environment.
 it is executed only once, guareded by `terraform_env_prepared` member.
 =cut
+
 sub terraform_prepare_env {
     my ($self) = @_;
     return if $self->terraform_env_prepared;
@@ -329,6 +382,7 @@ sub terraform_prepare_env {
 Calls terraform tool and applies the corresponding configuration .tf file
 
 =cut
+
 sub terraform_apply {
     my ($self, %args) = @_;
     my @instances;
@@ -339,15 +393,15 @@ sub terraform_apply {
     $args{count} //= '1';
     my $instance_type = get_var('PUBLIC_CLOUD_INSTANCE_TYPE');
     my $image = $self->get_image_id();
-    my $ssh_private_key_file = '/root/.ssh/id_rsa';
+    my $image_uri = $self->get_image_uri();
     my $cloud_name = $self->conv_openqa_tf_name;
 
     record_info('WARNING', 'Terraform apply has been run previously.') if ($self->terraform_applied);
 
     $self->terraform_prepare_env();
 
-    record_info('INFO', "Creating instance $instance_type from $image ...");
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
+        record_info('INFO', "Creating instance $instance_type from $image ...");
         assert_script_run('cd ' . TERRAFORM_DIR . "/$cloud_name");
         my $sap_media = get_required_var('HANA');
         my $sap_regcode = get_required_var('SCC_REGCODE_SLES4SAP');
@@ -359,6 +413,7 @@ sub terraform_apply {
         $sle_version =~ s/-/_/g;
         my $ha_sap_repo = get_var('HA_SAP_REPO') ? get_var('HA_SAP_REPO') . '/SLE_' . $sle_version : '';
         my $suffix = sprintf("%04x", rand(0xffff));
+        my $fencing_mechanism = get_var('FENCING_MECHANISM', 'sbd');
         file_content_replace('terraform.tfvars',
             q(%MACHINE_TYPE%) => $instance_type,
             q(%REGION%) => $self->provider_client->region,
@@ -368,13 +423,13 @@ sub terraform_apply {
             q(%STORAGE_ACCOUNT_NAME%) => $storage_account_name,
             q(%STORAGE_ACCOUNT_KEY%) => $storage_account_key,
             q(%HA_SAP_REPO%) => $ha_sap_repo,
-            q(%SLE_VERSION%) => $sle_version
+            q(%SLE_VERSION%) => $sle_version,
+            q(%FENCING_MECHANISM%) => $fencing_mechanism
         );
         upload_logs(TERRAFORM_DIR . "/$cloud_name/terraform.tfvars", failok => 1);
         script_retry('terraform init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
         assert_script_run("terraform workspace new ${resource_group}${suffix} -no-color", $terraform_timeout);
-    }
-    else {
+    } else {
         assert_script_run('cd ' . TERRAFORM_DIR);
         script_retry('terraform init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
     }
@@ -386,7 +441,21 @@ sub terraform_apply {
             my $value = $args{vars}->{$key};
             $cmd .= sprintf(q(-var '%s=%s' ), $key, escape_single_quote($value));
         }
-        $cmd .= "-var 'image_id=" . $image . "' " if ($image);
+        # image_uri and image_id are mutally exclusive
+        if ($image_uri && $image) {
+            die "PUBLIC_CLOUD_IMAGE_URI and PUBLIC_CLOUD_IMAGE_ID are mutually exclusive";
+        } elsif ($image_uri) {
+            $cmd .= "-var 'image_uri=" . $image_uri . "' ";
+            record_info('INFO', "Creating instance $instance_type from $image_uri ...");
+        } elsif ($image) {
+            $cmd .= "-var 'image_id=" . $image . "' ";
+            record_info('INFO', "Creating instance $instance_type from $image ...");
+        }
+        if (is_azure) {
+            # Note: Only the default Azure terraform profiles contains the 'storage-account' variable
+            my $storage_account = get_var('PUBLIC_CLOUD_STORAGE_ACCOUNT');
+            $cmd .= "-var 'storage-account=$storage_account' " if ($storage_account);
+        }
         $cmd .= "-var 'instance_count=" . $args{count} . "' ";
         $cmd .= "-var 'type=" . $instance_type . "' ";
         $cmd .= "-var 'region=" . $self->provider_client->region . "' ";
@@ -403,7 +472,9 @@ sub terraform_apply {
     if (get_var('FLAVOR') =~ 'UEFI') {
         $cmd .= "-var 'uefi=true' ";
     }
-
+    if (get_var('PUBLIC_CLOUD_NVIDIA')) {
+        $cmd .= "-var gpu=true ";
+    }
     $cmd .= "-out myplan";
     record_info('TFM cmd', $cmd);
 
@@ -430,7 +501,7 @@ sub terraform_apply {
     my $ips;
     my $resource_id;
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        foreach my $vm_type ('cluster_nodes', 'drbd', 'netweaver') {
+        foreach my $vm_type ('hana', 'drbd', 'netweaver') {
             push @{$vms}, @{$output->{$vm_type . '_name'}->{value}};
             push @{$ips}, @{$output->{$vm_type . '_public_ip'}->{value}};
         }
@@ -447,7 +518,6 @@ sub terraform_apply {
             resource_id => $resource_id,
             instance_id => @{$vms}[$i],
             username => $self->provider_client->username,
-            ssh_key => $ssh_private_key_file,
             image_id => $image,
             region => $self->provider_client->region,
             type => $instance_type,
@@ -456,6 +526,7 @@ sub terraform_apply {
         push @instances, $instance;
     }
 
+    publiccloud::instances::set_instances(@instances);
     # Return an ARRAY of objects 'instance'
     return @instances;
 }
@@ -465,10 +536,13 @@ sub terraform_apply {
 Destroys the current terraform deployment
 
 =cut
+
 sub terraform_destroy {
     my ($self) = @_;
     # Do not destroy if terraform has not been applied or the environment doesn't exist
     return unless ($self->terraform_applied);
+
+    select_host_console(force => 1);
 
     my $cmd;
     record_info('INFO', 'Removing terraform plan...');
@@ -483,11 +557,15 @@ sub terraform_destroy {
         # Add image_id, offer and sku on Azure runs, if defined.
         if (is_azure) {
             my $image = $self->get_image_id();
+            my $image_uri = $self->get_image_uri();
             my $offer = get_var('PUBLIC_CLOUD_AZURE_OFFER');
             my $sku = get_var('PUBLIC_CLOUD_AZURE_SKU');
+            my $storage_account = get_var('PUBLIC_CLOUD_STORAGE_ACCOUNT');
             $cmd .= " -var 'image_id=$image'" if ($image);
+            $cmd .= " -var 'image_uri=${image_uri}'" if ($image_uri);
             $cmd .= " -var 'offer=$offer'" if ($offer);
             $cmd .= " -var 'sku=$sku'" if ($sku);
+            $cmd .= " -var 'storage-account=$storage_account'" if ($storage_account);
         }
     }
     # Retry 3 times with considerable delay. This has been introduced due to poo#95932 (RetryableError)
@@ -517,6 +595,7 @@ sub terraform_destroy {
 Build the tags parameter for terraform. It is a single depth json like
 c<{"key": "value"}> where c<value> must be a string.
 =cut
+
 sub terraform_param_tags
 {
     my ($self) = @_;
@@ -540,6 +619,7 @@ sub escape_single_quote {
 This method is called called after each test on failure or success.
 
 =cut
+
 sub cleanup {
     my ($self) = @_;
     $self->terraform_destroy();
@@ -551,6 +631,7 @@ sub cleanup {
 This function implements a provider specifc stop call for a given instance.
 
 =cut
+
 sub stop_instance
 {
     die('stop_instance() isn\'t implemented');
@@ -561,6 +642,7 @@ sub stop_instance
 This function implements a provider specifc start call for a given instance.
 
 =cut
+
 sub start_instance
 {
     die('start_instance() isn\'t implemented');
@@ -571,6 +653,7 @@ sub start_instance
 This function implements a provider specifc get_state call for a given instance.
 
 =cut
+
 sub get_state_from_instance
 {
     die('get_state_from_instance() isn\'t implemented');

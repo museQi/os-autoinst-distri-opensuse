@@ -16,8 +16,11 @@ use testapi;
 use version_utils qw(is_storage_ng is_sle);
 use utils;
 use power_action_utils 'prepare_system_shutdown';
+use Utils::Architectures;
+use Carp;
+use virt_autotest::utils qw(check_port_state);
 
-our @EXPORT = qw(set_serial_console_on_vh switch_from_ssh_to_sol_console adjust_for_ipmi_xen set_pxe_efiboot ipmitool);
+our @EXPORT = qw(set_grub_on_vh switch_from_ssh_to_sol_console adjust_for_ipmi_xen set_pxe_efiboot ipmitool enable_sev_in_kernel add_kernel_options set_grub_terminal_and_timeout reconnect_when_ssh_console_broken);
 
 #With the new ipmi backend, we only use the root-ssh console when the SUT boot up,
 #and no longer setup the real serial console for either kvm or xen.
@@ -41,40 +44,17 @@ sub switch_from_ssh_to_sol_console {
     save_screenshot;
 }
 
-my $grub_ver;
+my $grub_ver = "grub2";
 
 sub get_dom0_serialdev {
-    my $root_dir = shift;
-    $root_dir //= '/';
-
     my $dom0_serialdev;
-
-    script_run("clear");
-    script_run("cat ${root_dir}/etc/SuSE-release || cat ${root_dir}/etc/os-release");
-    save_screenshot;
-    assert_screen([qw(on_host_sles_12_sp2_or_above on_host_lower_than_sles_12_sp2)]);
-
     if (get_var("XEN") || check_var("HOST_HYPERVISOR", "xen")) {
-        if (match_has_tag("on_host_sles_12_sp2_or_above")) {
-            $dom0_serialdev = "hvc0";
-        }
-        elsif (match_has_tag("on_host_lower_than_sles_12_sp2")) {
-            $dom0_serialdev = "xvc0";
-        }
+        $dom0_serialdev = "hvc0";
     }
     else {
         $dom0_serialdev = get_var("LINUX_CONSOLE_OVERRIDE", "ttyS1");
     }
-
-    if (match_has_tag("grub1")) {
-        $grub_ver = "grub1";
-    }
-    else {
-        $grub_ver = "grub2";
-    }
-
-    enter_cmd("echo \"Debug info: hypervisor serial dev should be $dom0_serialdev. Grub version is $grub_ver.\"");
-
+    enter_cmd("echo \"Debug info: hypervisor serial dev should be $dom0_serialdev.\"");
     return $dom0_serialdev;
 }
 
@@ -337,11 +317,11 @@ sub set_pxe_efiboot {
 }
 
 #Usage:
-#For post installation, use set_serial_console_on_vh(,...) directly
-#For during installation, use set_serial_console_on_vh("/mnt",...)
-#For custom usage, use set_serial_console_on_vh($mount_point, $installation_disk, $virt_type)
+#For post installation, use set_grub_on_vh(,...) directly
+#For during installation, use set_grub_on_vh("/mnt",...)
+#For custom usage, use set_grub_vh($mount_point, $installation_disk, $virt_type)
 #Please pass desired hypervisor type to this function explicitly. There is no default value for $virt_type
-sub set_serial_console_on_vh {
+sub set_grub_on_vh {
     my ($mount_point, $installation_disk, $virt_type) = @_;
 
     #prepare accessible grub
@@ -362,9 +342,12 @@ sub set_serial_console_on_vh {
     }
 
     #set up xen serial console
-    my $ipmi_console = get_dom0_serialdev("$root_dir");
+    my $ipmi_console = get_dom0_serialdev();
     if (${virt_type} eq "xen" || ${virt_type} eq "kvm") { setup_console_in_grub($ipmi_console, $root_dir, $virt_type); }
     else { die "Host Hypervisor is not xen or kvm"; }
+
+    #Enabling SEV on the machine if it is running SEV/SEV-ES test
+    enable_sev_in_kernel(root_dir => $root_dir) if (get_var('VIRT_SEV_ES_GUEST_INSTALL') and is_x86_64 and ${virt_type} eq "kvm");
 
     #cleanup mount
     if ($mount_point ne "") {
@@ -388,6 +371,177 @@ sub ipmitool {
 
     bmwqemu::diag("IPMI: $stdout");
     return $stdout;
+}
+
+=head2 enable_sev_in_kernel
+
+  enable_sev_in_kernel(dst_machine => $dst_machine, root_dir => $root_dir)
+
+Enable SEV in the kernel, because it is disabled by default. This is done by putting
+the following onto the kernel command line: mem_encrypt=on kvm_amd.sev=1. To make the 
+changes persistent, append the above to the variable holding parameters of the kernel
+command line in /etc/default/grub to preserve SEV settings across reboots:
+$ cat /etc/default/grub
+...
+GRUB_CMDLINE_LINUX="... mem_encrypt=on kvm_amd.sev=1"
+...
+mem_encrypt=on turns on the SME memory encryption feature on the host which protects 
+against the physical attack on the hypervisor memory. The kvm_amd.sev parameter 
+actually enables SEV in the kvm module. This subroutine receives only two arguments,
+the dst_machine is the host on which operations will be performed, the root_dir is 
+the partition on which grub files reside. If these two arguments are not given any
+values, operations will be performed on localhost and '/' partition. This subroutine
+calls add_kernel_options to do the actual kernel options adding work.
+
+=cut
+
+sub enable_sev_in_kernel {
+    my (%args) = @_;
+
+    $args{dst_machine} //= 'localhost';
+    $args{root_dir} //= '';
+    $args{root_dir} .= '/' unless $args{root_dir} =~ /\/$/;
+    croak("No AMD EPYC cpu on $args{dst_machine}, so sev can not be enabled in kernel.") unless (script_run("lscpu | grep -i \'AMD EPYC\'") == 0);
+    add_kernel_options(dst_machine => $args{dst_machine}, root_dir => $args{root_dir}, kernel_opts => 'mem_encrypt=on kvm_amd.sev=1');
+}
+
+=head2 add_kernel_options
+
+  add_kernel_options(dst_machine => $dst_machine, root_dir => $root_dir, 
+  kernel_opts => $options, grub_to_change => [1|2|3])
+
+Adding additional kernel options onto kernel command line in grub config file and 
+also GRUB_CMDLINE_LINUX_DEFAULT line in default grub config file. This subroutine 
+receives only four arguments, dst_machine is the host on which operations will be 
+performed, root_dir is the partition on which grub files reside, kernel_opts holds 
+a text string this is composed of terminal types separated by spaces, timeout has
+the value of desired timeout of grub boot, and the grub_to_change indicates whether 
+grub.cfg or default grub will be included to have these changes, including 1(Default 
+value. Both grub.cfg and default grub will be changed), 2(Only the grub.cfg will 
+be changed, 3(Only the default grub will be changed), and all the other values are 
+invalid. If there are no values passed in to dst_machine and root_dir, operations 
+will be performed on localhost and root '/' partition by default.
+
+=cut
+
+sub add_kernel_options {
+    my (%args) = @_;
+
+    $args{dst_machine} //= 'localhost';
+    $args{root_dir} //= '';
+    $args{root_dir} .= '/' unless $args{root_dir} =~ /\/$/;
+    $args{kernel_opts} //= '';
+    $args{grub_to_change} //= 1;
+    croak("Nothing to be added onto kernel command line. Argument kernel_opts should not be empty.") if ($args{kernel_opts} eq '');
+    if (($args{grub_to_change} != 1) and ($args{grub_to_change} != 2) and ($args{grub_to_change} != 3)) {
+        croak("Nothing to be changed. Argument grub_to_change indicates neither grub.cfg nor default grub will be changed.");
+    }
+
+    my @options = split(/ /, $args{kernel_opts});
+    my $cmd = '';
+    if (($args{grub_to_change} == 1) or ($args{grub_to_change} == 2)) {
+        my $grub_cfg_file = "$args{root_dir}boot/grub2/grub.cfg";
+        foreach (@options) {
+            $cmd = "sed -i -r \'s/\\b\\S*$_\\S*\\b//g; /^\\s{1,}(linux|linuxefi)\\s{1,}\\\/boot\\\// s/\$/ $_/g\' $grub_cfg_file";
+            $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+            assert_script_run($cmd);
+            save_screenshot;
+        }
+        $cmd = "cat $grub_cfg_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        record_info("Content of $grub_cfg_file on $args{dst_machine}", script_output($cmd, proceed_on_failure => 1));
+    }
+
+    if (($args{grub_to_change} == 1) or ($args{grub_to_change} == 3)) {
+        my $grub_default_file = "$args{root_dir}etc/default/grub";
+        foreach (@options) {
+            $cmd = "sed -i -r \'s/\\b\\S*$_\\S*\\b//g; /GRUB_CMDLINE_LINUX_DEFAULT/ s/\\\"\$/ $_\\\"/g\' $grub_default_file";
+            $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+            assert_script_run($cmd);
+            save_screenshot;
+        }
+        $cmd = "cat $grub_default_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        record_info("Content of $grub_default_file on $args{dst_machine}", script_output($cmd, proceed_on_failure => 1));
+    }
+}
+
+=head2 set_grub_terminal_and_timeout
+
+  set_grub_terminal_and_timeou(dst_machine => $dst_machine, root_dir => $root_dir, 
+  terminals => $terminals, timeout => $timeout, grub_to_change => [1|2|3])
+
+Change grub boot terminal and timeout settings in grub configuration file and also 
+GRUB_TERMINAL and GRUB_TIMEOUT in default grub configuration file. This subroutine
+receives only five arguments, dst_machine is the host on which operations will be 
+performed, root_dir is the partition on which grub files reside, terminals holds a 
+single text string this is composed of kernel options separated by spaces, and
+the grub_to_change indicates whether grub.cfg or default grub will be changed to
+have the kernel_opts, including 1(Default value. Both grub.cfg and default grub
+will be changed), 2(Only the grub.cfg will be changed, 3(Only the default grub will
+be changed), and all the other values are invalid. If there are no values passed in
+to dst_machine and root_dir, operations will be performed on localhost and root '/'
+partition by default.  Almost all regular kernel options can be passed in directly
+without modification except for very extreme cases in which very special characters
+should be treated specially and even escaped before being used.
+
+=cut
+
+sub set_grub_terminal_and_timeout {
+    my (%args) = @_;
+
+    $args{dst_machine} //= 'localhost';
+    $args{terminals} //= 'console serial';
+    $args{timeout} //= '30';
+    $args{root_dir} //= '';
+    $args{root_dir} .= '/' unless $args{root_dir} =~ /\/$/;
+    $args{grub_to_change} //= 1;
+    if (($args{grub_to_change} != 1) and ($args{grub_to_change} != 2) and ($args{grub_to_change} != 3)) {
+        croak("Nothing to be changed. Argument grub_to_change indicates neither grub.cfg nor default grub will be changed.");
+    }
+
+    my $cmd = '';
+    if (($args{grub_to_change} == 1) or ($args{grub_to_change} == 2)) {
+        my $grub_cfg_file = "$args{root_dir}boot/grub2/grub.cfg";
+        $cmd = "sed -i -r '/^terminal.*\$/ {:mylabel; n; /^terminal.*\$/d;b mylabel;};' $grub_cfg_file; "
+          . "sed -i -r 's/^terminal.*\$/terminal_input $args{terminals}\\nterminal_output $args{terminals}/g;' $grub_cfg_file; "
+          . "sed -i -r '/set timeout=-{0,1}[0-9]{1,}/ s/timeout.*\$/timeout=$args{timeout}/g;' $grub_cfg_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        assert_script_run($cmd);
+        save_screenshot;
+
+        $cmd = "cat $grub_cfg_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        record_info("Content of $grub_cfg_file on $args{dst_machine}", script_output($cmd, proceed_on_failure => 1));
+    }
+
+    if (($args{grub_to_change} == 1) or ($args{grub_to_change} == 3)) {
+        my $grub_default_file = "$args{root_dir}etc/default/grub";
+        $cmd = "sed -i -r \'s/^#{0,}GRUB_TERMINAL=.*\$/GRUB_TERMINAL=\"$args{terminals}\"/' $grub_default_file; "
+          . "sed -i -r \'s/^#{0,}GRUB_TIMEOUT=.*\$/GRUB_TIMEOUT=$args{timeout}/' $grub_default_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        assert_script_run($cmd);
+        save_screenshot;
+
+        $cmd = "cat $grub_default_file";
+        $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
+        record_info("Content of $grub_default_file on $args{dst_machine}", script_output($cmd, proceed_on_failure => 1));
+    }
+}
+
+sub reconnect_when_ssh_console_broken {
+    # Switch to sol console to check serial console output
+    # It is useful in the case of host crash and reboot
+    record_info("WARN", "ssh connection is broken and switch to SOL console", result => 'fail');
+    select_console 'sol', await_console => 0;
+    # Wait host bootup if it crashes
+    die "Unable to connect machine" unless check_port_state(get_required_var('SUT_IP'), 22, 10);
+    reset_consoles;
+    record_info("switch back to ssh console to collect logs");
+    select_console('root-ssh');
+    script_run("uptime");
+    script_run("ls -l /var/crash/");
+    save_screenshot;
 }
 
 1;

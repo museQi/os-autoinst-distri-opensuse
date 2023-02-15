@@ -34,13 +34,13 @@ YuiRestClient::Widget::Tab - Class representing a tab in the UI. It can be YDumb
 
 =head1 COPYRIGHT
 
-Copyright ©2021  SUSE LLC
+Copyright 2021 SUSE LLC
 
 SPDX-License-Identifier: FSFAP
 
 =head1 AUTHORS
 
-QE YaST <qa-sle-yast@suse.de>
+QE Yam <qe-yam at suse de>
 
 =head1 SYNOPSIS
 

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: common parts on SMT and RMT, and other tools related to repositories.
-# Maintainer: Lemon Li <leli@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 =head1 repo_tools
 
@@ -107,6 +107,7 @@ Helper to add QA:HEAD repository repository (usually from IBS).
 This repository *is* mandatory.
 
 =cut
+
 sub add_qa_head_repo {
     my (%args) = @_;
     my $priority = $args{priority} // 0;
@@ -122,6 +123,7 @@ Helper to add QA web repository repository.
 This repository is *not* mandatory.
 
 =cut
+
 sub add_qa_web_repo {
     my $repo = get_var('QA_WEB_REPO');
     zypper_ar($repo, name => 'qa-web', no_gpg_check => is_sle("<12") ? 0 : 1) if ($repo);
@@ -137,6 +139,7 @@ Then the names of patterns are parsed from the XML.
 Returns array containing all installed patterns in the system.
 
 =cut
+
 sub get_installed_patterns {
     my $xml = script_output q[zypper -n -q -x se -i -t pattern];
     map { $_->to_literal() } find_nodes(xpc => get_xpc($xml), xpath => '//solvable[@kind="pattern"]/@name');
@@ -150,6 +153,7 @@ This takes something like "MODULE_BASESYSTEM_SOURCE" as parameter C<$repo_name>
 and returns "REPO_SLE15_SP1_MODULE_BASESYSTEM_SOURCE" when being called on SLE15-SP1.
 
 =cut
+
 sub get_repo_var_name {
     my ($repo_name) = @_;
     my $distri = uc get_required_var("DISTRI");
@@ -163,6 +167,7 @@ sub get_repo_var_name {
 Run smt wizard workflow and to get repository synced with smt server
 
 =cut
+
 sub smt_wizard {
     my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'smt-wizard');
     assert_screen 'smt-wizard-1';
@@ -226,6 +231,7 @@ sub smt_mirror_repo {
 Type password, TAB, password, ALT+o. This is for use within YaST.
 
 =cut
+
 sub type_password_twice {
     type_password;
     send_key "tab";
@@ -241,6 +247,7 @@ rmt_wizard();
 Install Repository Mirroring Tool and mariadb database
 
 =cut
+
 sub rmt_wizard {
     # add develop version of rmt repo
     if (get_var("DEV_PATH")) {
@@ -259,11 +266,6 @@ sub rmt_wizard {
     zypper_call 'in mariadb';
 
     enter_cmd "yast2 rmt;echo yast2-rmt-wizard-\$? > /dev/$serialdev";
-    # On x11, workaround bsc#1191112 by mouse click or drag the dialog.
-    if (($setup_console =~ /x11/) && (check_var('RMT_TEST', 'rmt_chinese'))) {
-        record_soft_failure('bsc#1191112 - When navigating through YaST module screens the next screen appears, but its content is not loaded');
-        mouse_set(100, 100);
-    }
     assert_screen 'yast2_rmt_registration';
     send_key 'alt-u';
     wait_still_screen(2, 5);
@@ -288,12 +290,6 @@ sub rmt_wizard {
     send_key 'alt-n';
     assert_screen 'yast2_rmt_ssl_CA_password';
     type_password_twice;
-    # On x11, workaround bsc#1191112 by mouse click or drag the dialog.
-    if (($setup_console =~ /x11/) && (check_var('RMT_TEST', 'rmt_chinese'))) {
-        record_soft_failure('bsc#1191112 - When navigating through YaST module screens the next screen appears, but its content is not loaded');
-        wait_still_screen(10, 15);
-        mouse_drag(startx => 480, starty => 50, endx => 485, endy => 50, button => 'left');
-    }
     assert_screen [qw(yast2_rmt_firewall yast2_rmt_firewall_disable)], 50;
     if (match_has_tag('yast2_rmt_firewall')) {
         if (check_var('RMT_TEST', 'rmt_chinese')) {
@@ -306,7 +302,7 @@ sub rmt_wizard {
     wait_still_screen;
     send_key 'alt-n';
     assert_screen 'yast2_rmt_service_status', 90;
-    send_key_until_needlematch('yast2_rmt_config_summary', 'alt-n', 3, 10);
+    send_key_until_needlematch('yast2_rmt_config_summary', 'alt-n', 4, 10);
     send_key 'alt-f';
     wait_serial("yast2-rmt-wizard-0", 800) || die 'rmt wizard failed, it can be connection issue or credential issue';
 }
@@ -318,6 +314,7 @@ sub rmt_wizard {
 Function to sync rmt server
 
 =cut
+
 sub rmt_sync {
     script_retry 'rmt-cli sync', delay => 60, retry => 6, timeout => 1800;
 }
@@ -329,6 +326,7 @@ sub rmt_sync {
 Function to enable products
 
 =cut
+
 sub rmt_enable_pro {
     my $pro_ls = get_var('RMT_PRO') || 'sle-module-legacy/15/x86_64';
     assert_script_run "rmt-cli products enable $pro_ls", 600;
@@ -341,6 +339,7 @@ sub rmt_enable_pro {
 Function to mirror the enabled repository
 
 =cut
+
 sub rmt_mirror_repo {
     assert_script_run 'rmt-cli mirror', 1800;
 }
@@ -352,6 +351,7 @@ sub rmt_mirror_repo {
 Function to list products
 
 =cut
+
 sub rmt_list_pro {
     assert_script_run 'rmt-cli product list', 600;
 }
@@ -365,6 +365,7 @@ available repositories and the mirrored packages
 C<$datafile> is repository source.
 
 =cut
+
 sub rmt_import_data {
     my ($datapath) = @_;
     # Check import data resource exsited
@@ -382,6 +383,7 @@ sub rmt_import_data {
 RMT server export data about available repositories and the mirrored packages
 
 =cut
+
 sub rmt_export_data {
     my $datapath = "/rmtdata/";
     assert_script_run("mkdir -p $datapath");
@@ -400,6 +402,7 @@ sub rmt_export_data {
 Prepare SLES or OSS souce repositories
 
 =cut
+
 sub prepare_source_repo {
     my $cmd;
     if (is_sle) {
@@ -453,6 +456,7 @@ sub prepare_source_repo {
 Disable source repositories
 
 =cut
+
 sub disable_source_repo {
     if (is_sle && get_var('FLAVOR') =~ /-Updates$|-Incidents$/) {
         zypper_call(q{mr -d $(zypper -n lr | awk '/-Source/ {print $1}')});
@@ -470,6 +474,7 @@ sub disable_source_repo {
 Generate SLE or openSUSE versions. C<$separator> is separator used for version number, it will be default to _ if omitted. Example: SLES-12-4, openSUSE_Leap
 
 =cut
+
 sub generate_version {
     my ($separator) = @_;
     my $dist = get_required_var('DISTRI');
@@ -505,6 +510,7 @@ C<$args> should have following keys defined:
 - C<URI>: repository uri, used as a search criteria if no C<Filter> provided.
 
 =cut
+
 sub validate_repo_properties {
     my ($args) = @_;
     my $search_criteria = $args->{Filter} // $args->{URI};
@@ -551,6 +557,7 @@ Returns Hash reference with all the parsed properties and their values, for exam
 {Alias => 'repo-oss', Name => 'openSUSE-Tumbleweed-Oss', Enabled => 'Yes', ...}
 
 =cut
+
 sub parse_repo_data {
     my ($repo_identifier) = @_;
     my @lines = split(/\n/, script_output("zypper lr $repo_identifier"));

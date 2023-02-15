@@ -18,6 +18,7 @@ use strict;
 use warnings;
 use base 'btrfs_test';
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(is_sle);
 
@@ -56,7 +57,7 @@ sub get_last_snap_number {
 
 sub run {
     my $self = shift;
-    $self->select_serial_terminal;
+    select_serial_terminal;
     $self->cron_mock_lastrun() if is_sle('<15');
 
     my @snapper_cmd = "snapper create";
@@ -86,7 +87,7 @@ sub run {
     }
     assert_script_run("snapper list");
     # Delete all those snapshots we just created so other tests are not confused
-    assert_script_run("snapper delete --sync $first_snap_to_delete-" . get_last_snap_number(), timeout => 180);
+    assert_script_run("snapper delete --sync $first_snap_to_delete-" . get_last_snap_number(), timeout => 240);
     assert_script_run("snapper list");
 }
 

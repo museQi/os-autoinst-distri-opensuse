@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Setup 'audit-test' test environment of a system with needed packages
-# Maintainer: llzhao <llzhao@suse.com>
+# Maintainer: QE Security <none@suse.de>
 # Tags: poo#93441, poo#104070
 
 use base 'consoletest';
@@ -14,6 +14,7 @@ use testapi;
 use utils;
 use registration 'add_suseconnect_product';
 use audit_test;
+use version_utils 'is_sle';
 
 sub run {
     my ($self) = @_;
@@ -24,7 +25,7 @@ sub run {
     select_console 'root-console';
 
     if (script_run('which SUSEConnect') != 0) {
-        record_soft_failure('bsc#1193782', 'SUSEConnect is not installed when system role is common criteria');
+        record_soft_failure('bsc#1193782 - SUSEConnect is not installed when system role is common criteria');
         zypper_call('in SUSEConnect');
     }
     # Add needed modules
@@ -34,7 +35,8 @@ sub run {
 
     # Install needed packages/paterns
     zypper_call('in -t pattern devel_basis');
-    zypper_call('in git expect libcap-devel psmisc cryptsetup');
+    my $pkexec_package = is_sle('<15-SP5') ? "polkit" : "pkexec";
+    zypper_call("in git expect libcap-devel psmisc cryptsetup $pkexec_package");
 
     # Install vsftpd
     zypper_call('in vsftpd');

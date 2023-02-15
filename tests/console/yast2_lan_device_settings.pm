@@ -56,7 +56,7 @@ sub run {
             send_key "alt-n";
             send_key "alt-c";
             close_yast2_lan();
-            record_soft_failure("Duplicate IP, $static_ip is currently unavailable. Skipping static IP assignment");
+            record_info('Softfail', "Duplicate IP, $static_ip is currently unavailable. Skipping static IP assignment", result => 'softfail');
         } elsif (match_has_tag 'static-ip-address-set') {
             close_yast2_lan();
 
@@ -73,7 +73,7 @@ sub run {
             send_key "alt-y";    # select dynamic address option
             send_key "alt-n";    # next
             assert_screen 'dynamic-ip-address-set';
-            close_yast2_lan();
+            close_yast2_lan('yast2-ncurses-closed');
 
             # verify that dynamic IP address has been set
             assert_script_run "ip r s | grep dhcp";
@@ -140,7 +140,7 @@ sub run {
     open_yast2_lan();
 
     for (1 .. 2) { send_key "tab" }    # move to device list
-    send_key_until_needlematch 'vlan-selected', 'down', 5, 5;    # move to vlan
+    send_key_until_needlematch 'vlan-selected', 'down', 6, 5;    # move to vlan
     send_key "alt-t";    # remove vlan
     assert_screen 'vlan-deleted';
     close_yast2_lan();

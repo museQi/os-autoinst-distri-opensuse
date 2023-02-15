@@ -8,6 +8,7 @@ use network_utils;
 use utils 'zypper_call';
 use Exporter 'import';
 use Utils::Architectures;
+use Utils::Logging 'tar_and_upload_log';
 
 
 our @EXPORT_OK = qw(
@@ -118,14 +119,14 @@ sub verify_license_translations {
         wait_screen_change { send_key 'alt-l' };
         # in textmode only arrow navigation is possible
         if (get_var('VIDEOMODE') =~ 'text') {
-            send_key_until_needlematch("license-language-selected-english-us", 'up', 60);
+            send_key_until_needlematch("license-language-selected-english-us", 'up', 61);
             send_key 'ret';
         }
         else {
             assert_and_click "license-language-selected-$current_lang";
         }
         wait_screen_change { type_string(substr($lang, 0, 1)) } unless (check_var('VIDEOMODE', 'text'));
-        send_key_until_needlematch("license-language-selected-dropbox-$lang", 'down', 60);
+        send_key_until_needlematch("license-language-selected-dropbox-$lang", 'down', 61);
         if (is_s390x()) {
             record_soft_failure('bsc#1172738 - "Next" button is triggered, even though it is not in focus while selecting language on License Agreement screen on s390x');
             assert_and_click("license-language-selected-dropbox-$lang");
@@ -154,6 +155,7 @@ Uploads autoyast profile used for the installation, as well as modified profile,
 in case feature to modify the profile dynamically was used.
 Non existing files will be ignored.
 =cut
+
 sub upload_autoyast_profile {
     # Upload autoyast profile if file exists
     if (script_run('test -e /tmp/profile/autoinst.xml') == 0) {
@@ -177,12 +179,13 @@ sub upload_autoyast_profile {
 Uploads autoyast schema files shipped in the distribution as a tarball.
 If expected directory doesn't exist, no attempt to upload logs occurs.
 =cut
+
 sub upload_autoyast_schema {
     my ($self) = @_;
     my $xml_schema_path = "/usr/share/YaST2/schema/autoyast/rng";
     # Upload schema files if directory exists
     if (script_run("test -e $xml_schema_path") == 0) {
-        $self->tar_and_upload_log("$xml_schema_path/*.rng", '/tmp/autoyast_schema.tar.bz2');
+        tar_and_upload_log("$xml_schema_path/*.rng", '/tmp/autoyast_schema.tar.bz2');
     }
 }
 

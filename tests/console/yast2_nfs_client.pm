@@ -14,23 +14,21 @@
 #   * We test mount and umount and we check for the version
 #   * We try to read and write some forbiden files
 #   * We download 1GB file and check it's checksum
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "y2_module_consoletest";
 
 use strict;
 use warnings;
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use lockapi;
 use utils qw(zypper_call systemctl script_retry);
 use mm_network 'setup_static_mm_network';
 use nfs_common;
 
 sub run {
-    #
-    # Preparation
-    #
-    select_console 'root-console';
+    select_serial_terminal;
 
     # NFSCLIENT defines if the test should be run on multi-machine setup.
     # Otherwise, configure server and client on the single machine.
@@ -58,6 +56,9 @@ sub run {
     # add comments into fstab and save current fstab bsc#429326
     assert_script_run 'sed -i \'5i# test comment\' /etc/fstab';
     assert_script_run 'cat /etc/fstab > fstab_before';
+
+    # From now we need needles
+    select_console 'root-console';
 
     #
     # YaST nfs-client execution
@@ -91,6 +92,9 @@ sub run {
     #
     # Check the result
     #
+
+    # From now we can use serial terminal
+    select_serial_terminal;
 
     mount_export();
     if (get_var('NFSCLIENT')) {

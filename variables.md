@@ -26,7 +26,7 @@ AY_EXPAND_VARS | string | | Commas separated list of variable names to be expand
 BASE_VERSION | string | | |
 BETA | boolean | false | Enables checks and processing of beta warnings. Defines current stage of the product under test.
 BCI_DEVEL_REPO | string | | This parameter is given to the bci-tests to inject a different SLE_BCI repository url to the container image instead of the default one. Used by `bci_test.pm`.
-BCI_TEST_ENVS | string | | The list of environments to be tested, e.g. `base,init,dotnet,python,node,go,multistage`. Used by `bci_test.pm`.
+BCI_TEST_ENVS | string | | The list of environments to be tested, e.g. `base,init,dotnet,python,node,go,multistage`. Used by `bci_test.pm`. Use `-` to not schedule any BCI test runs.
 BCI_TESTS_REPO | string | | Location of the bci-tests repository to be cloned. Used by `bci_prepare.pm`.
 BCI_TESTS_BRANCH | string | | Branch to be cloned from bci-tests. Used by `bci_prepare.pm`.
 BCI_TIMEOUT | string | | Timeout given to the command to test each environment. Used by `bci_test.pm`.
@@ -37,7 +37,8 @@ CHECK_RELEASENOTES | boolean | false | Loads `installation/releasenotes` test mo
 CHECKSUM_* | string | | SHA256 checksum of the * medium. E.g. CHECKSUM_ISO_1 for ISO_1.
 CHECKSUM_FAILED | string | | Variable is set if checksum of installation medium fails to visualize error in the test module and not just put this information in the autoinst log file.
 CLUSTER_TYPES | string | false | Set the type of cluster that have to be analyzed (example: "drbd hana"). This variable belongs to PUBLIC_CLOUD_.
-CONTAINER_RUNTIME | string | | Container runtime to be used, e.g.  `docker`, `podman`, or both `podman,docker`.
+CONTAINER_RUNTIME | string | | Container runtime to be used, e.g.  `docker`, `podman`, or both `podman,docker`. In addition, it is also used for other container tests, like  `kubectl`, `helm`, etc.
+CONTAINERS_K3S_VERSION | string |  | If defined, install the provided version of k3s
 CONTAINERS_NO_SUSE_OS | boolean | false | Used by main_containers to see if the host is different than SLE or openSUSE.
 CONTAINERS_UNTESTED_IMAGES | boolean | false | Whether to use `untested_images` or `released_images` from `lib/containers/urls.pm`.
 CONTAINERS_CRICTL_VERSION | string | v1.23.0 | The version of CriCtl tool.
@@ -58,10 +59,8 @@ DVD |||
 ENCRYPT | boolean | false | Enables or indicates encryption of the disks. Can be combined with `FULL_LVM_ENCRYPT`, `ENCRYPT_CANCEL_EXISTING`, `ENCRYPT_ACTIVATE_EXISTING` and `UNENCRYPTED_BOOT`.
 ENCRYPT_CANCEL_EXISTING | boolean | false | Used to cancel activation of the encrypted partitions |
 SOFTLOCKUP_PANIC_DISABLED | boolean | false | Disables panicking on softlockup, provides a stack trace once a softlockup has been detected (see POO#50345)
-ETC_PASSWD | string | | Sets content for /etc/passwd, can be used to mimic existing users. Is used to test import of existing users on backends which
-have no shapshoting support (powerVM, zVM). Should be used together with `ENCRYPT_ACTIVATE_EXISTING` and `ETC_SHADOW`.
-ETC_SHADOW | string | | Sets content for /etc/shadow, can be used to mimic existing users. Is used to test import of existing users on backends which
-have no shapshoting support (powerVM, zVM). Should be used together with `ENCRYPT_ACTIVATE_EXISTING` and `ETC_PASSWD`.
+ETC_PASSWD | string | | Sets content for /etc/passwd, can be used to mimic existing users. Is used to test import of existing users on backends which have no shapshoting support (powerVM, zVM). Should be used together with `ENCRYPT_ACTIVATE_EXISTING` and `ETC_SHADOW`.
+ETC_SHADOW | string | | Sets content for /etc/shadow, can be used to mimic existing users. Is used to test import of existing users on backends which have no shapshoting support (powerVM, zVM). Should be used together with `ENCRYPT_ACTIVATE_EXISTING` and `ETC_PASSWD`.
 EVERGREEN |||
 EXIT_AFTER_START_INSTALL | boolean | false | Indicates that test suite will be finished after `installation/start_install` test module. So that all the test modules after this one will not be scheduled and executed.
 EXPECTED_INSTALL_HOSTNAME | string | | Contains expected hostname YaST installer got from the environment (DHCP, 'hostname=', as a kernel cmd line argument)
@@ -90,10 +89,16 @@ INSTLANG | string | en_US | Installation locale settings.
 IPXE | boolean | false | Indicates ipxe boot.
 ISO_MAXSIZE | integer | | Max size of the iso, used in `installation/isosize.pm`.
 IS_MM_SERVER | boolean | | If set, run server-specific part of the multimachine job
+K3S_SYMLINK | string | | Can be 'skip' or 'force'. Skips the installation of k3s symlinks to tools like kubectl or forces the creation of symlinks 
+K3S_BIN_DIR | string | | If defined, install k3s to this provided directory instead of `/usr/local/bin/`
+K3S_CHANNEL | string | | Set the release channel to pick the k3s version from. Options include "stable", "latest" and "testing"
+KUBECTL_CLUSTER | string | | Defines the cluster used to test `kubectl`. Currently only `k3s` is supported.
+KUBECTL_VERSION | string | v1.22.12 | Defines the kubectl version.
 KEEP_DISKS | boolean | false | Prevents disks wiping for remote backends without snaphots support, e.g. ipmi, powerVM, zVM
 KEEP_ONLINE_REPOS | boolean | false | openSUSE specific variable, not to replace original repos in the installed system with snapshot mirrors which are not yet published.
 KEEP_PERSISTENT_NET_RULES | boolean | false | Keep udev rules 70-persistent-net.rules, which are deleted on backends with image support (qemu, svirt) by default.
 LAPTOP |||
+LIBC_LIVEPATCH | boolean | false | If set, run userspace livepatching tests
 LINUX_BOOT_IPV6_DISABLE | boolean | false | If set, boots linux kernel with option named "ipv6.disable=1" which disables IPv6 from startup.
 LINUXRC_KEXEC | integer | | linuxrc has the capability to download and run a new kernel and initrd pair from the repository.<br> There are four settings for the kexec option:<br> 0: feature disabled;<br> 1: always restart with kernel/initrd from repository (without bothering to check if it's necessary);<br>2: restart only if needed - that is, if linuxrc detects that the booted initrd is outdated (this is the default);<br>3: like kexec=2 but without user interaction.<br> *More details [here](https://en.opensuse.org/SDB:Linuxrc)*.
 LIVECD | boolean | false | Indicates live image being used.
@@ -104,8 +109,9 @@ LTP_COMMAND_FILE | string | | The LTP test command file (e.g. syscalls, cve)
 LTP_COMMAND_EXCLUDE | string | | This regex is used to exclude tests from LTP command file.
 LTP_KNOWN_ISSUES | string | | Used to specify a url for a json file with well known LTP issues. If an error occur which is listed, then the result is overwritten with softfailure.
 LTP_REPO | string | | The repo which will be added and is used to install LTP package.
-LTP_RUN_NG_BRANCH | string | | Define the branch of the LTP_RUN_NG_REPO.
-LTP_RUN_NG_REPO | string | | Define the runltp-ng repo to be used. Default in publiccloud/run_ltp.pm is the upstream master branch from https://github.com/metan-ucw/runltp-ng.git.
+LTP_RUN_NG_BRANCH | string | master | Define the branch of the LTP_RUN_NG_REPO.
+LTP_RUN_NG_REPO | string | https://github.com/metan-ucw/runltp-ng.git | Define the runltp-ng repo to be used. Default in publiccloud/run_ltp.pm is the upstream master branch from https://github.com/metan-ucw/runltp-ng.git.
+LTP_PC_RUNLTP_ENV | string | empty | Contains eventual internal environment new parameters for `runltp-ng`, defined with the `--env` option, initialized in a column-separated string format: "PAR1=xxx:PAR2=yyy:...". By default it is empty, undefined.
 LVM | boolean | false | Use lvm for partitioning.
 LVM_THIN_LV | boolean | false | Use thin provisioning logical volumes for partitioning,
 MACHINE | string | | Define machine name which defines worker specific configuration, including WORKER_CLASS.
@@ -115,6 +121,7 @@ MIRROR_{protocol} | string | | Specify source address
 MOK_VERBOSITY | boolean | false | Enable verbosity feature of shim. Requires preinstalled `mokutil`.
 MOZILLATEST |||
 NAME | string | | Name of the test run including distribution, build, machine name and job id.
+NAMESERVER | string | | Can be used to specify a name server's IP or FQDN.
 NET | boolean | false | Indicates net installation.
 NETBOOT | boolean | false | Indicates net boot.
 NETDEV | string | | Network device to be used when adding interface on zKVM.
@@ -126,11 +133,14 @@ NO_ADD_MAINT_TEST_REPOS | boolean | true |  Do not add again (and duplicate) rep
 NOAUTOLOGIN | boolean | false | Indicates disabled auto login.
 NOIMAGES |||
 NOLOGS | boolean | false | Do not collect logs if set to true. Handy during development.
+NVIDIA_REPO | string | '' | Define the external repo for nvidia driver. Used by `nvidia.pm` module.
 OPT_KERNEL_PARAMS | string | Specify optional kernel command line parameters on bootloader settings page of the installer.
+PHUB_READY | boolean | true | Indicates PackageHub is available, it may be not ready in early development phase[Before Beta].
 PERF_KERNEL | boolean | false | Enables kernel performance testing.
 PERF_INSTALL | boolean | false | Enables kernel performance testing installation part.
 PERF_SETUP | boolean | false | Enables kernel performance testing deployment part.
 PERF_RUNCASE | boolean | false | Enables kernel performance testing run case part.
+RMT_SERVER | string | Local server to be used in RMT registration. 
 SALT_FORMULAS_PATH | string | | Used to point to a tarball with relative path to [/data/yast2](https://github.com/os-autoinst/os-autoinst-distri-opensuse/tree/master/data/yast2) which contains all the needed files (top.sls, form.yml, ...) to support provisioning with Salt masterless mode.
 PKGMGR_ACTION_AT_EXIT | string | "" | Set the default behavior of the package manager when package installation has finished. Possible actions are: close, restart, summary. If PKGMGR_ACTION_AT_EXIT is not set in openQA, test module will read the default value from /etc/sysconfig/yast2.
 PXE_PRODUCT_NAME | string | false | Defines image name for PXE booting
@@ -164,12 +174,17 @@ SPLITUSR | boolean | false | Enables `installation/partitioning_splitusr` test m
 SUSEMIRROR | string | | Mirror url of the installation medium.
 SYSAUTHTEST | boolean | false | Enable system authentication test (`sysauth/sssd`)
 SYSCTL_IPV6_DISABLED | boolean | undef | Set automatically in samba_adcli tests when ipv6 is disabled
+SYSTEMD_NSPAWN | boolean | 1 | Run systemd upstream tests in nspawn container rather than qemu
+SYSTEMD_TESTSUITE | boolean | undef | Enable schedule of systemd upstream tests
+SYSTEMD_UNIFIED_CGROUP | string | "yes", "no", "hybrid", "default" | systemd currently supports 3 (unified,legacy,hybrid) cgroups configurations
 TEST | string | | Name of the test suite.
 TEST_CONTEXT | string | | Defines the class name to be used as the context instance of the test. This is used in the scheduler to pass the `run_args` into the loadtest function. If it is not given it will be undef.
 TOGGLEHOME | boolean | false | Changes the state of partitioning to have or not to have separate home partition in the proposal.
 TUNNELED | boolean | false | Enables the use of normal consoles like "root-consoles" on a remote SUT while configuring the tunnel in a local "tunnel-console"
 TYPE_BOOT_PARAMS_FAST | boolean | false | When set, forces `bootloader_setup::type_boot_parameters` to use the default typing interval.
 UEFI | boolean | false | Indicates UEFI in the testing environment.
+ULP_THREAD_COUNT | integer | 1000 | Number of threads to create in `ulp_threads` test module.
+ULP_THREAD_SLEEP | integer | 100 | Sleep length after each thread loop iteration in `ulp_threads` module. High thread-to-CPU ratio needs longer sleep length.
 UPGRADE | boolean | false | Indicates upgrade scenario.
 USBBOOT | boolean | false | Indicates booting to the usb device.
 USEIMAGES |||
@@ -202,6 +217,41 @@ LINUXRC_BOOT | boolean | true | To be used only in scenarios where we are bootin
 ZYPPER_WHITELISTED_ORPHANS | string | empty | Whitelist expected orphaned packages, do not fail if any are found. Upgrade scenarios are expecting orphans by default. Used by console/orphaned_packages_check.pm
 PUBLIC_CLOUD_CONTAINER_IMAGES_REPO | string | | The Container images repository in CSP
 PREPARE_TEST_DATA_TIMEOUT | integer | 300 | Download assets in the prepare_test_data module timeout
+ZFS_REPOSITORY | string | | Optional repository used to test zfs from
+TRENTO_HELM_VERSION | string | 3.8.2 | Helm version of the JumpHost
+TRENTO_CYPRESS_VERSION | string | 4.4.0 | used as tag for the docker.io/cypress/included registry
+TRENTO_VM_IMAGE | string | SUSE:sles-sap-15-sp3-byos:gen2:latest | used as --image parameter during the Azure VM creation
+TRENTO_VERSION | string | (implicit 1.0.0) | Optional. Used as reference version string for the installed Trento
+TRENTO_REGISTRY_CHART | string | registry.suse.com/trento/trento-server | Helm chart registry
+TRENTO_REGISTRY_CHART_VERSION | string |  | Optional. Tag for the chart image
+TRENTO_REGISTRY_IMAGE_RUNNER | string |  | Optional. Overwrite the trento-runner image in the helm chart
+TRENTO_REGISTRY_IMAGE_RUNNER_VERSION | string |  | Optional. Version tag for the trento-runner image
+TRENTO_REGISTRY_IMAGE_WANDA | string |  | Optional. Overwrite the trento-wanda image in the helm chart
+TRENTO_REGISTRY_IMAGE_WANDA_VERSION | string |  | Optional. Version tag for the trento-wand image
+TRENTO_REGISTRY_IMAGE_WEB | string |  | Optional. Overwrite the trento-web image in the helm chart
+TRENTO_REGISTRY_IMAGE_WEB_VERSION | string |  | Optional. Version tag for the trento-web image
+TRENTO_GITLAB_REPO | string | gitlab.suse.de/qa-css/trento | Repository for the deployment scripts
+TRENTO_GITLAB_BRANCH | string | master | Branch to use in the deployment script repository
+TRENTO_GITLAB_TOKEN | string | from SECRET_TRENTO_GITLAB_TOKEN | Force the use of a custom token
+TRENTO_DEPLOY_VER | string | | Force the Trento deployment script to be used from a release
+TRENTO_AGENT_REPO | string | https://dist.suse.de/ibs/Devel:/SAP:/trento:/factory/SLE_15_SP3/x86_64 | Repository where to get the trento-agent installer
+TRENTO_AGENT_RPM | string | | Trento-agent rpm file name
+TRENTO_EXT_DEPLOY_IP | string | | Public IP of a Trento web instance not deployed by openQA
+TRENTO_WEB_PASSWORD | string | | Trento web password for the admin user. If not provided, random generated one.
+TRENTO_QESAPDEPLOY_CLUSTER_OS_VER | string | | OS for nodes in SAP cluster.
+TRENTO_QESAPDEPLOY_HANA_ACCOUNT | string | | Azure blob server account for the SAP installers for the qe-sap-deployment hana_media.yaml.
+TRENTO_QESAPDEPLOY_HANA_CONTAINER | string | | Azure blob server container for the qe-sap-deployment hana_media.yaml.
+TRENTO_QESAPDEPLOY_HANA_TOKEN | string | | Azure blob server token for the qe-sap-deployment hana_media.yaml.
+TRENTO_QESAPDEPLOY_SAPCAR | string | | SAPCAR file name for the qe-sap-deployment hana_media.yaml.
+TRENTO_QESAPDEPLOY_IMDB_SERVER | string | | IMDB_SERVER file name for the qe-sap-deployment hana_media.yaml.
+TRENTO_QESAPDEPLOY_IMDB_CLIENT | string | | IMDB_CLIENT file name for the qe-sap-deployment hana_media.yaml.
+QESAP_CONFIG_FILE | string | | filename (of relative path) of the config YAML file for the qesap.py script, within `sles4sap/qe_sap_deployment/` subfolder in `data`.
+QESAP_DEPLOYMENT_DIR | string | /root/qe-sap-deployment | JumpHost folder where to install the qe-sap-deployment code
+QESAP_INSTALL_VERSION | string | | If configured, test will run with a specific release of qe-sap-deployment code from https://github.com/SUSE/qe-sap-deployment/releases. Otherwise the code is used from a latest version controlled by QESAP_INSTALL_GITHUB_REPO and QESAP_INSTALL_GITHUB_BRANCH
+QESAP_INSTALL_GITHUB_REPO | string | github.com/SUSE/qe-sap-deployment | Git repository where to clone from. Ignored if QESAP_INSTALL_VERSION is configured.
+QESAP_INSTALL_GITHUB_BRANCH | string | | Git branch. Ignored if QESAP_INSTALL_VERSION is configured.
+QESAP_INSTALL_GITHUB_NO_VERIFY | string | | Configure http.sslVerify false. Ignored if QESAP_VER is configured.
+
 
 ### Publiccloud specific variables
 
@@ -209,22 +259,21 @@ The following variables are relevant for publiccloud related jobs. Keep in mind 
 
 Variable        | Type      | Default value | Details
 ---             | ---       | ---           | ---
-_SECRET_PUBLIC_CLOUD_REST_URL | string | "https://publiccloud.qa.suse.de/vault" | Vault server URL
-_SECRET_PUBLIC_CLOUD_REST_USER | string | "" | Vault server user name
-_SECRET_PUBLIC_CLOUD_REST_PW | string | "" | Vault server user password
-_SECRET_PUBLIC_CLOUD_REST_SSL_INSECURE | boolean | true | Do not validate Vault server certificate
 PUBLIC_CLOUD | boolean | false | All Public Cloud tests have this variable set to true. Contact: qa-c@suse.de
 PUBLIC_CLOUD_ACCOUNT | string | "" | For GCE will set account via `gcloud config set account ' . $self->account`.
 PUBLIC_CLOUD_ACCNET | boolean | false | If set, az_accelerated_net test module is added to the job.
+PUBLIC_CLOUD_AHB_LT | string | "SLES_BYOS" | For Azure, it specifies the license type to change to (and test).
+PUBLIC_CLOUD_AZ_API | string | "http://169.254.169.254/metadata/instance/compute" | For Azure, it is the metadata API endpoint.
+PUBLIC_CLOUD_AZ_API_VERSION | string | "2021-02-01" | For Azure, it is the API version used whe querying metadata API.
 PUBLIC_CLOUD_HDD2_SIZE | integer | "" | If set, the instance will have an additional disk with the given capacity in GB
 PUBLIC_CLOUD_HDD2_TYPE | string | "" | If PUBLIC_CLOUD_ADDITIONAL_DISK_SIZE is set, this defines the additional disk type (optional). The required value depends on the cloud service provider.
 PUBLIC_CLOUD_ARCH | string | "x86_64" | The architecture of created VM.
+PUBLIC_CLOUD_AZURE_PUBLISHER | string | "SUSE" | Specific to Azure. Allows to define the used publisher, if it should not be "SUSE"
 PUBLIC_CLOUD_AZURE_OFFER | string | "" | Specific to Azure. Allow to query for image based on offer and sku. Should be used together with PUBLIC_CLOUD_AZURE_SKU.
 PUBLIC_CLOUD_AZURE_SKU | string | "" | Specific to Azure.
 PUBLIC_CLOUD_BUILD | string | "" | The image build number. Used only when we use custom built image.
 PUBLIC_CLOUD_BUILD_KIWI | string | "" | The image kiwi build number. Used only when we use custom built image.
 PUBLIC_CLOUD_CHECK_BOOT_TIME | boolean | false | If set, boottime test module is added to the job.
-PUBLIC_CLOUD_GOOGLE_CLIENT_ID | string | "" | In GCE one of the variables used to authenticate  user.
 PUBLIC_CLOUD_CONFIDENTIAL_VM | boolean | false | GCE Confidential VM instance
 PUBLIC_CLOUD_UPLOAD_IMG | boolean | false | If set, `publiccloud/upload_image` test module is added to the job.
 PUBLIC_CLOUD_CONSOLE_TESTS | boolean | false | If set, console tests are added to the job.
@@ -237,43 +286,50 @@ PUBLIC_CLOUD_EC2_UPLOAD_VPCSUBNET | string | "" | Allow to instruct ec2uploadimg
 PUBLIC_CLOUD_FIO | boolean | false | If set, storage_perf test module is added to the job.
 PUBLIC_CLOUD_FIO_RUNTIME | integer | 300 | Set the execution time for each FIO tests.
 PUBLIC_CLOUD_FIO_SSD_SIZE | string | "100G" | Set the additional disk size for the FIO tests.
-PUBLIC_CLOUD_GOOGLE_UPLOAD_GUEST_FEATURES | string | "" | The list of features given to upload VM
+PUBLIC_CLOUD_FORCE_REGISTRATION | boolean | false | If set, tests/publiccloud/registration.pm will register cloud guest
 PUBLIC_CLOUD_IGNORE_EMPTY_REPO | boolean | false | Ignore empty maintenance update repos
 PUBLIC_CLOUD_IMAGE_ID | string | "" | The image ID we start the instance from
+PUBLIC_CLOUD_IMAGE_URI | string | "" | The URI of the image to be used. Use 'auto' if you want the URI to be calculated.
 PUBLIC_CLOUD_IMAGE_LOCATION | string | "" | The URL where the image gets downloaded from. The name of the image gets extracted from this URL.
 PUBLIC_CLOUD_IMAGE_PROJECT | string | "" | Google Compute Engine image project
-PUBLIC_CLOUD_IMG_PROOF_TESTS | string | false | Tests run  by img-proof. (We use 'default')
+PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION | string | "" | Defines the image definition for uploading Arm64 images to the image gallery.
+PUBLIC_CLOUD_IMG_PROOF_TESTS | string | "test-sles" | Tests run by img-proof.
+PUBLIC_CLOUD_IMG_PROOF_EXCLUDE | string | "" | Tests to be excluded by img-proof.
 PUBLIC_CLOUD_INSTANCE_TYPE | string | "" | Specify the instance type. Which instance types exists depends on the CSP. (default-azure: Standard_A2, default-ec2: t2.large )
-PUBLIC_CLOUD_KEY | string | "" | Private key data for gce, similar to `PUBLIC_CLOUD_KEY_SECRET`.
-PUBLIC_CLOUD_KEY_ID | string | "" | The CSP credentials key-id to used to access API.
-PUBLIC_CLOUD_KEY_SECRET | string | "" | The CSP credentials secret used to access API.
 PUBLIC_CLOUD_LTP | boolean | false | If set, the run_ltp test module is added to the job.
 PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE | boolean | false | Do not remove the instance when the test fails.
-PUBLIC_CLOUD_PERF_DB_URI | string | "" | Optional variable. If set, the bootup times get stored in the influx database. The database name is 'publiccloud'. (e.g. PUBLIC_CLOUD_PERF_DB_URI=http://openqa-perf.qa.suse.de:8086)
+PUBLIC_CLOUD_PERF_DB_URI | string | "" | If set, the bootup times get stored in the influx database. (e.g. PUBLIC_CLOUD_PERF_DB_URI=http://publiccloud-ng.qe.suse.de:8086)
+PUBLIC_CLOUD_PERF_DB | string | "perf" | If `PUBLIC_CLOUD_PERF_DB_URI` is defined, this variable defines the bucket in which the performance metrics are stored
+PUBLIC_CLOUD_PERF_DB_ORG | string | "qec" | If `PUBLIC_CLOUD_PERF_DB_URI` is defined, this variable defines the organization in which the performance metrics are stored
+_PUBLIC_CLOUD_PERF_DB_TOKEN | string | "" | | If `PUBLIC_CLOUD_PERF_DB_URI` is defined, this required variable is the access token
+_PUBLIC_CLOUD_PERF_PUSH_DATA | boolean | "" | If set to `1`, then the test run will push it's metrics to the InfluxDB. This variable is used as secret variable, so that cloned jobs by default do not push metrics to avoid accidental database contamination.
 PUBLIC_CLOUD_PREPARE_TOOLS | boolean | false | Activate prepare_tools test module by setting this variable.
 PUBLIC_CLOUD_GOOGLE_PROJECT_ID | string | "" | GCP only, used to specify the project id.
 PUBLIC_CLOUD_PROVIDER | string | "" | The type of the CSP (e.g. AZURE, EC2, GCE).
 PUBLIC_CLOUD_QAM | boolean | false | Previously used to recognize maintenance jobs - now deprecated - should be removed.
 PUBLIC_CLOUD_REBOOT_TIMEOUT | integer | 600 | Number of seconds we wait for instance to reboot.
-PUBLIC_CLOUD_REGION | string | "" | The region to use. (default-azure: westeurope, default-ec2: eu-central-1, default-gcp: europe-west1).
+PUBLIC_CLOUD_REGION | string | "" | The region to use. (default-azure: westeurope, default-ec2: eu-central-1, default-gcp: europe-west1-b). In `upload-img` for Azure Arm64 images, multiple comma-separated regions are supported (see `lib/publiccloud/azure.pm`)
 PUBLIC_CLOUD_RESOURCE_GROUP | string | "qashapopenqa" | Allows to specify resource group name on SLES4SAP PC tests.
 PUBLIC_CLOUD_RESOURCE_NAME | string | "openqa-vm" | The name we use when creating our VM.
 PUBLIC_CLOUD_SKIP_MU | boolean | false | Debug variable used to run test without maintenance updates repository being applied.
+PUBLIC_CLOUD_REDOWNLOAD_MU | boolean | false | Debug variable used to redownload the maintenance repositories (as they might be downloaded by parent test)
 PUBLIC_CLOUD_GOOGLE_ACCOUNT | string | "" | GCE only, used to specify the account id.
-PUBLIC_CLOUD_GOOGLE_SERVICE_ACCOUNT | string | "" | GCE only, used to specify the service account.
-PUBLIC_CLOUD_AZURE_TENANT_ID | string | "" | Used to create the service account file together with `PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID`.
 PUBLIC_CLOUD_TOOLS_REPO | string | false | The URL to the cloud:tools repo (optional). (e.g. http://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/Cloud:Tools.repo).
 PUBLIC_CLOUD_TTL_OFFSET | integer | 300 | This number + MAX_JOB_TIME equals the TTL of created VM.
 PUBLIC_CLOUD_SLES4SAP | boolean | false | If set, sles4sap test module is added to the job.
-PUBLIC_CLOUD_GOOGLE_STORAGE | string | "openqa-storage" | GCP only, Name of storage where we load the system image from.
 PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID | string | "" | Used to create the service account file together with `PUBLIC_CLOUD_AZURE_TENANT_ID`.
 PUBLIC_CLOUD_CONTAINER_IMAGES_REGISTRY | string | "" | Name for public cloud registry for the container images used on kubernetes tests.
 PUBLIC_CLOUD_K8S_CLUSTER | string | "" | Name for the kubernetes cluster.
 PUBLIC_CLOUD_AZURE_K8S_RESOURCE_GROUP | string | "" | Name for the resource group which is subscribed the kubernetes cluster.
-PUBLIC_CLOUD_VAULT_NAMESPACE | string | "qac" | The Vault server namespace.
-PUBLIC_CLOUD_VAULT_TIMEOUT | integer | 60 | The number of seconds we wait for the Vault server to respond.
-PUBLIC_CLOUD_VAULT_TRIES | integer | 3 | The number of attempts to connect to Vault server.
+PUBLIC_CLOUD_CREDENTIALS_URL | string | "" | Base URL where to get the credentials from. This will be used to compose the full URL together with `PUBLIC_CLOUD_NAMESPACE`.
+PUBLIC_CLOUD_NAMESPACE | string | "" | The Public Cloud Namespace name that will be used to compose the full credentials URL together with `PUBLIC_CLOUD_CREDENTIALS_URL`.
+PUBLIC_CLOUD_NVIDIA | boolean | 0 | If enabled, nvidia module would be scheduled. This variable should be enabled only sle15SP4 and above.
 PUBLIC_CLOUD_USER | string | "" | The public cloud instance system user.
 PUBLIC_CLOUD_XEN | boolean | false | Indicates if this is a Xen test run.
+PUBLIC_CLOUD_STORAGE_ACCOUNT | string | "" | Storage account used e.g. for custom disk and container images
 PUBLIC_CLOUD_TERRAFORM_FILE | string | "" | If defined, use this terraform file (from the `data/` directory) instead the CSP default
 TERRAFORM_TIMEOUT | integer | 1800 | Set timeout for terraform actions
+PUBLIC_CLOUD_INSTANCE_IP | string | "" | If defined, no instance will be created and this IP will be used to connect to
+_SECRET_PUBLIC_CLOUD_INSTANCE_SSH_KEY | string | "" | The `~/.ssh/id_rsa` existing key allowed by `PUBLIC_CLOUD_INSTANCE_IP` instance
+PUBLIC_CLOUD_TERRAFORM_DIR | string | "/root/terraform" | Override default root path to terraform directory
+PUBLIC_CLOUD_SCC_ENDPOINT | string | "registercloudguest" | Name of binary which will be used to register image . Except default value only possible value is "SUSEConnect" anything else will lead to test failure!

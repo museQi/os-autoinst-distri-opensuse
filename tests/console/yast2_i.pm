@@ -17,7 +17,7 @@
 # "nfs-client"
 # - Disable "recommended packages" and accept install of test package
 # - Remove test package
-# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "y2_module_consoletest";
 use strict;
@@ -82,7 +82,7 @@ sub run {
     # Check disk usage widget for not showing subvolumes (bsc#949945)
     # on SLE12SP0 hidden subvolume isn't supported
     if (!check_var('VERSION', '12')) {
-        send_key_until_needlematch('yast2-sw_single-extras-open', 'alt-e', 5, 3);
+        send_key_until_needlematch('yast2-sw_single-extras-open', 'alt-e', 6, 3);
         wait_screen_change { send_key 'alt-s' };
         assert_screen 'yast2-sw_single-disk_usage';
         wait_screen_change { send_key 'alt-o' };

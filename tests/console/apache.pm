@@ -13,14 +13,14 @@
 
 use base "consoletest";
 use testapi;
+use serial_terminal 'select_serial_terminal';
 use strict;
 use warnings;
 use utils;
 use version_utils qw(is_sle is_jeos);
 
 sub run {
-    my ($self) = @_;
-    $self->select_serial_terminal;
+    select_serial_terminal;
 
     # installation of docs and manpages is excluded in zypp.conf
     # enable full package installation, and clean up previous apache2 deployment
@@ -135,7 +135,7 @@ sub run {
 
             # Run and test this new environment
             assert_script_run 'httpd2-prefork -f /tmp/prefork/httpd.conf';
-            assert_script_run 'until ps aux|grep wwwrun; do echo waiting for httpd2-prefork pid; done';
+            assert_script_run 'until ps aux|grep wwwrun|grep -E httpd\(2\)?-prefork; do echo waiting for httpd2-prefork pid; done';
             assert_script_run 'ps aux | grep "\-f /tmp/prefork/httpd.conf" | grep httpd2-prefork';
 
             # Run and test the old environment too

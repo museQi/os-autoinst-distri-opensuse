@@ -325,11 +325,7 @@ if (is_sle('15+') && !check_var('SCC_REGISTER', 'installation')) {
 # settings
 if (is_updates_test_repo && !get_var('MAINT_TEST_REPO')) {
     my %incidents;
-    my %u_url;
-    $incidents{OS} = get_var('OS_TEST_ISSUES', '');
-    $u_url{OS} = get_var('OS_TEST_TEMPLATE', '');
-
-    my @inclist;
+    $incidents{OS} = get_var('OS_TEST_REPOS', '');
 
     my @addons = split(/,/, get_var('SCC_ADDONS', ''));
 
@@ -344,10 +340,6 @@ if (is_updates_test_repo && !get_var('MAINT_TEST_REPO')) {
     # We need to push sles4sap and ha for using _TEST_ISSUES and _TEST_TEMPLATE below
     push(@addons, 'sles4sap', 'ha') if (is_sle('<15') && !get_var('PLAIN_SLE') && check_var('FLAVOR', 'SAP-DVD-Updates')) || check_var('FLAVOR', 'Server-DVD-SAP-Incidents');
 
-    # push sdk addon to slenkins tests
-    if (get_var('TEST', '') =~ /^slenkins/) {
-        push(@addons, 'sdk');
-    }
     # move ADDONS to SCC_ADDONS for maintenance
     set_var('ADDONS', '');
     # move ADDONURL to SCC_ADDONS and remove ADDONURL_SDK
@@ -356,20 +348,14 @@ if (is_updates_test_repo && !get_var('MAINT_TEST_REPO')) {
 
     for my $i (@addons) {
         if ($i) {
-            $incidents{uc($i)} = get_var(uc($i) . '_TEST_ISSUES');
-            $u_url{uc($i)} = get_var(uc($i) . '_TEST_TEMPLATE');
+            $incidents{uc($i)} = get_var(uc($i) . '_TEST_REPOS');
         }
     }
 
-    my $repos = map_incidents_to_repo(\%incidents, \%u_url);
+    my $repos = join_incidents_to_repo(\%incidents);
 
     set_var('MAINT_TEST_REPO', $repos);
     set_var('SCC_REGISTER', 'installation');
-
-    # slenkins test needs FOREIGN_REPOS
-    if (get_var('TEST', '') =~ /^slenkins/) {
-        set_var('FOREIGN_REPOS', $repos);
-    }
 }
 
 if (get_var('ENABLE_ALL_SCC_MODULES') && !get_var('SCC_ADDONS')) {
@@ -611,6 +597,7 @@ sub load_virt_guest_install_tests {
         loadtest "virt_autotest/unified_guest_installation";
         loadtest "virt_autotest/set_config_as_glue";
         loadtest "virt_autotest/uefi_guest_verification" if get_var("VIRT_UEFI_GUEST_INSTALL");
+        loadtest "virt_autotest/sev_es_guest_verification" if get_var("VIRT_SEV_ES_GUEST_INSTALL");
     }
     else {
         loadtest "virt_autotest/guest_installation_run";
@@ -639,7 +626,10 @@ sub load_virt_feature_tests {
         loadtest 'virtualization/universal/hotplugging_memory';
         loadtest 'virtualization/universal/hotplugging_cleanup';
     }
-    loadtest "virtualization/universal/storage" if get_var("ENABLE_STORAGE");
+    if (get_var("ENABLE_STORAGE")) {
+        loadtest "virtualization/universal/storage";
+        loadtest "virt_autotest/libvirt_extend_storage_lvm";
+    }
     if (get_var("ENABLE_SNAPSHOT")) {
         loadtest "virt_autotest/virsh_internal_snapshot";
         loadtest "virt_autotest/virsh_external_snapshot";
@@ -673,6 +663,12 @@ if (is_jeos) {
 # load the tests in the right order
 if (is_kernel_test()) {
     load_kernel_tests();
+}
+elsif (is_systemd_test()) {
+    unless (is_jeos()) {
+        boot_hdd_image;
+    }
+    load_upstream_systemd_tests();
 }
 elsif (is_public_cloud) {
     load_publiccloud_tests();
@@ -874,7 +870,10 @@ elsif (get_var("VIRT_AUTOTEST")) {
     }
     if (get_var("VIRT_PRJ1_GUEST_INSTALL")) {
         load_virt_guest_install_tests;
-        load_virt_feature_tests if (!(get_var("GUEST_PATTERN") =~ /win/img) && is_x86_64 && !get_var("LTSS"));
+        if (!(get_var('GUEST_PATTERN', '') =~ /win/img) && is_x86_64 && !get_var("LTSS")) {
+            load_virt_feature_tests;
+            loadtest "virt_autotest/validate_system_health" if get_var("VALIDATE_SYSTEM_HEALTH");
+        }
     }
     #those tests which test extended features, such as hotpluggin, virtual network and SRIOV passthrough etc.
     #they can be seperated from prj1 if needed
@@ -893,23 +892,13 @@ elsif (get_var("VIRT_AUTOTEST")) {
         }
         loadtest "virt_autotest/reboot_and_wait_up_upgrade";
         if (get_var("XEN") || check_var("HOST_HYPERVISOR", "xen")) {
-            loadtest "virt_autotest/setup_xen_serial_console";
+            loadtest "virt_autotest/setup_xen_grub";
         }
         else {
-            loadtest "virt_autotest/setup_kvm_serial_console";
+            loadtest "virt_autotest/setup_kvm_grub";
         }
         loadtest "virt_autotest/reboot_and_wait_up_normal";
         loadtest "virt_autotest/host_upgrade_step3_run";
-    }
-    elsif (get_var("VIRT_PRJ3_GUEST_MIGRATION_SOURCE")) {
-        loadtest "virt_autotest/guest_migration_config_virtualization_env";
-        loadtest "virt_autotest/guest_migration_source_nfs_setup";
-        loadtest "virt_autotest/guest_migration_source_install_guest";
-        loadtest "virt_autotest/guest_migration_source_migrate";
-    }
-    elsif (get_var("VIRT_PRJ3_GUEST_MIGRATION_TARGET")) {
-        loadtest "virt_autotest/guest_migration_config_virtualization_env";
-        loadtest "virt_autotest/guest_migration_target_nfs_setup";
     }
     elsif (get_var("VIRT_PRJ4_GUEST_UPGRADE")) {
         loadtest "virt_autotest/guest_upgrade_run";
@@ -1116,7 +1105,6 @@ else {
         boot_hdd_image;
         if (check_var('HOSTNAME', 'client')) {
             loadtest 'network/setup_multimachine';
-            loadtest 'network/samba/samba_adcli';
         }
         elsif (check_var('HOSTNAME', 'win2k19')) {
             loadtest 'support_server/windows/win2019_boot';

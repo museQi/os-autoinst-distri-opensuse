@@ -10,7 +10,7 @@
 #           in Chinese.
 #        3. Run rmt-cli sync and ensure the output is in Chinese.
 #
-# Maintainer: Lemon Li <leli@suse.com>
+# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use strict;
 use warnings;
@@ -36,7 +36,7 @@ sub set_language_to_Chinese {
     become_root;
     script_run('yast2 language', die_on_timeout => 0);
     assert_screen 'yast2-language', 60;
-    send_key_until_needlematch 'yast2-lang-simplified-chinese', 'down', 180;
+    send_key_until_needlematch 'yast2-lang-simplified-chinese', 'down', 181;
     send_key 'alt-o';
 
     # Problem here is that sometimes installation takes longer than 10 minutes

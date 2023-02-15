@@ -35,8 +35,8 @@
 #   log: ""ERROR", "There are denied profile_replace records found in
 #   $audit_log" and fail test.
 # - upload /var/log/apache2/error_log and audit.log
-# Maintainer: llzhao <llzhao@suse.com>
-# Tags: poo#48773, tc#1695946
+# Maintainer: QE Security <none@suse.de>
+# Tags: poo#48773, tc#1695946, poo#111036
 
 
 use base apparmortest;
@@ -44,7 +44,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_tumbleweed);
+use version_utils qw(is_sle is_leap is_alp is_tumbleweed);
 use registration qw(add_suseconnect_product register_product);
 
 sub run {
@@ -80,7 +80,12 @@ sub run {
         add_suseconnect_product("sle-module-web-scripting", "$version", "$arch", "$params", "$timeout");
         add_suseconnect_product("sle-module-legacy", "$version", "$arch", "$params", "$timeout");
     }
-    zypper_call("in apache2 apache2-mod_apparmor apache2-mod_php7 php7 php7-mysql");
+
+    if (is_sle(">=15-SP4") || is_leap(">15.4") || is_tumbleweed() || is_alp()) {
+        zypper_call("in apache2 apache2-mod_apparmor apache2-mod_php8 php8 php8-mysql");
+    } else {
+        zypper_call("in apache2 apache2-mod_apparmor apache2-mod_php7 php7 php7-mysql");
+    }
 
     # Restart apparmor
     systemctl("restart apparmor");
@@ -148,6 +153,19 @@ sub run {
     if ($script_output =~ m/type=AVC .*apparmor=.*DENIED.* operation=.*profile_replace.* profile=.*httpd-prefork.*adminer.*/sx) {
         record_info("ERROR", "There are denied profile_replace records found in $audit_log", result => 'fail');
         $self->result('fail');
+    }
+    # Due to bsc#1191684, add following check points as well
+    my @check_list = ('file_receive', 'open', 'signal', 'mknod');
+    foreach my $check_point (@check_list) {
+        if ($script_output =~ m/type=AVC .*apparmor=.*DENIED.* operation=.*$check_point.* profile=.*httpd-prefork.*/sx) {
+            if (is_sle('>15-SP4')) {
+                record_info("ERROR", "There are denied $check_point records found in $audit_log", result => 'fail');
+                $self->result('fail');
+            }
+            else {
+                record_soft_failure('bsc#1191684 - Apparmor profile test case "apache2_changehat" found some "DENIED" audit records');
+            }
+        }
     }
 
     # Upload logs for reference
